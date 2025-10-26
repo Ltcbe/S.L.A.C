@@ -2,18 +2,22 @@
 import { useEffect, useState } from 'react'
 import { useParams } from 'next/navigation'
 
-const API = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://backend:8000'
-
 export default function TrainPage() {
   const params = useParams()
   const id = params?.id as string
   const [data, setData] = useState<any>(null)
+  const [err, setErr] = useState<string | null>(null)
 
   useEffect(() => {
     if (!id) return
-    fetch(`${API}/trains/${id}`).then(r => r.json()).then(setData)
+    setErr(null)
+    fetch(`/api/trains/${id}`, { cache: 'no-store' })
+      .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json() })
+      .then(setData)
+      .catch(e => setErr(e.message || 'Erreur réseau'))
   }, [id])
 
+  if (err) return <main className="max-w-3xl mx-auto p-6">Erreur : {err}</main>
   if (!data) return <main className="max-w-3xl mx-auto p-6">Chargement…</main>
 
   const j = data.journey

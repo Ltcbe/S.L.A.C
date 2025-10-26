@@ -18,8 +18,7 @@ services:
       retries: 10
     networks:
       appnet:
-        aliases:
-          - db
+        aliases: [db]
 
   backend:
     build: ./backend
@@ -37,8 +36,7 @@ services:
       - "8000"
     networks:
       appnet:
-        aliases:
-          - backend
+        aliases: [backend]
 
   worker:
     build: ./worker
@@ -56,14 +54,13 @@ services:
       USER_AGENT: ${USER_AGENT}
     networks:
       appnet:
-        aliases:
-          - worker
+        aliases: [worker]
 
   frontend:
     build: ./frontend
     restart: unless-stopped
     environment:
-      # On utilise le proxy Next → backend interne
+      # Le proxy Next (app/api/...) contactera le backend via ce hostname Docker
       BACKEND_URL: ${BACKEND_URL:-http://backend:8000}
       TZ: ${TZ}
       PORT: 3000
@@ -73,8 +70,7 @@ services:
       - "3000"
     networks:
       appnet:
-        aliases:
-          - frontend
+        aliases: [frontend]
 
 volumes:
   dbdata:

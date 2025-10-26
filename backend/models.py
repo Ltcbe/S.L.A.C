@@ -1,3 +1,4 @@
+# --- backend/models.py ---
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from sqlalchemy import String, Integer, BigInteger, Enum, DateTime, Date, ForeignKey, Boolean
 
@@ -14,8 +15,8 @@ class Journey(Base):
     to_station_uri: Mapped[str] = mapped_column(String(255), nullable=False)
     planned_departure: Mapped["DateTime"] = mapped_column(DateTime, nullable=False)
     planned_arrival: Mapped["DateTime"] = mapped_column(DateTime, nullable=False)
-    realtime_departure: Mapped["DateTime"] = mapped_column(DateTime, nullable=True)
-    realtime_arrival: Mapped["DateTime"] = mapped_column(DateTime, nullable=True)
+    realtime_departure: Mapped["DateTime | None"] = mapped_column(DateTime, nullable=True)
+    realtime_arrival: Mapped["DateTime | None"] = mapped_column(DateTime, nullable=True)
     status: Mapped[str] = mapped_column(Enum("running","completed", name="journey_status"), nullable=False)
     direction: Mapped[str | None] = mapped_column(String(128), nullable=True)
 

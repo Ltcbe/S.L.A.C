@@ -11,20 +11,25 @@ type Journey = {
   status: 'running' | 'completed'
 }
 
-const API = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://backend:8000'
-
 export default function Home() {
   const [status, setStatus] = useState<'running'|'completed'|''>('running')
   const [items, setItems] = useState<Journey[]>([])
   const [loading, setLoading] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
 
   const fetchList = async (s: 'running'|'completed'|'') => {
-    setLoading(true)
+    setLoading(true); setErr(null)
     const q = s ? `?status=${s}` : ''
-    const res = await fetch(`${API}/trains${q}`)
-    const data = await res.json()
-    setItems(data)
-    setLoading(false)
+    try {
+      const res = await fetch(`/api/trains${q}`, { cache: 'no-store' })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const data = await res.json()
+      setItems(data)
+    } catch (e:any) {
+      setErr(e.message || 'Erreur réseau')
+    } finally {
+      setLoading(false)
+    }
   }
 
   useEffect(() => { fetchList(status) }, [status])
@@ -39,7 +44,10 @@ export default function Home() {
         </div>
       </header>
 
-      {loading ? <p>Chargement…</p> : (
+      {loading && <p>Chargement…</p>}
+      {err && <p className="text-red-400">Erreur : {err}</p>}
+
+      {!loading && !err && (
         <div className="grid gap-3">
           {items.map(j => (
             <a key={j.id} href={`/train/${j.id}`} className="card hover:opacity-90">

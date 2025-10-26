@@ -1,7 +1,6 @@
 'use client'
 import { useEffect, useState } from 'react'
 import { useParams } from 'next/navigation'
-import '../globals.css'
 
 export default function TrainPage() {
   const params = useParams()
@@ -32,7 +31,9 @@ export default function TrainPage() {
         <div style={{fontSize:'1.2rem',fontWeight:600}}>
           {j.vehicle_name} <span className="badge">{j.status}</span>
         </div>
-        <div className="text-sm">{new Date(j.planned_departure).toLocaleString()} → {new Date(j.planned_arrival).toLocaleString()}</div>
+        <div className="text-sm">
+          {new Date(j.planned_departure).toLocaleString()} → {new Date(j.planned_arrival).toLocaleString()}
+        </div>
       </div>
 
       <div className="card" style={{marginTop:'1rem'}}>
@@ -43,8 +44,20 @@ export default function TrainPage() {
               <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start'}}>
                 <div>
                   <div style={{fontWeight:500}}>{s.station_name}</div>
-                  <div className="text-sm">Planifié : {s.planned_departure ? new Date(s.planned_departure).toLocaleString() : s.planned_arrival ? new Date(s.planned_arrival).toLocaleString() : '-'}</div>
-                  <div className="text-sm">Réel : {s.realtime_departure ? new Date(s.realtime_departure).toLocaleString() : s.realtime_arrival ? new Date(s.realtime_arrival).toLocaleString() : '-'}</div>
+                  <div className="text-sm">
+                    Planifié : {s.planned_departure
+                      ? new Date(s.planned_departure).toLocaleString()
+                      : s.planned_arrival
+                        ? new Date(s.planned_arrival).toLocaleString()
+                        : '-'}
+                  </div>
+                  <div className="text-sm">
+                    Réel : {s.realtime_departure
+                      ? new Date(s.realtime_departure).toLocaleString()
+                      : s.realtime_arrival
+                        ? new Date(s.realtime_arrival).toLocaleString()
+                        : '-'}
+                  </div>
                 </div>
                 <div className="text-sm" style={{textAlign:'right'}}>
                   {s.left && <span className="badge">parti</span>}{" "}

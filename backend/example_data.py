@@ -11,8 +11,8 @@ def seed_example():
             vehicle_uri="http://irail.be/vehicle/IC3033",
             vehicle_name="IC3033",
             service_date=date.today(),
-            from_station_uri="http://irail.be/stations/NMBS/008892007",  # Tournai (indicatif)
-            to_station_uri="http://irail.be/stations/NMBS/008812005",    # Bruxelles-Central (indicatif)
+            from_station_uri="http://irail.be/stations/NMBS/008892007",
+            to_station_uri="http://irail.be/stations/NMBS/008812005",
             planned_departure=datetime.now().replace(minute=0, second=0, microsecond=0),
             planned_arrival=datetime.now().replace(minute=0, second=0, microsecond=0) + timedelta(hours=1, minutes=5),
             realtime_departure=None,

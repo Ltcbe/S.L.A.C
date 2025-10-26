@@ -1,6 +1,7 @@
+# --- backend/example_data.py ---
 from datetime import datetime, date, timedelta
-from .database import SessionLocal, engine
-from .models import Base, Journey, JourneyStop
+from database import SessionLocal, engine
+from models import Base, Journey, JourneyStop
 
 Base.metadata.create_all(bind=engine)
 
@@ -10,8 +11,8 @@ def seed_example():
             vehicle_uri="http://irail.be/vehicle/IC3033",
             vehicle_name="IC3033",
             service_date=date.today(),
-            from_station_uri="http://irail.be/stations/NMBS/008892007",  # Tournai (id indicative)
-            to_station_uri="http://irail.be/stations/NMBS/008812005",    # Bruxelles-Central (id indicative)
+            from_station_uri="http://irail.be/stations/NMBS/008892007",  # Tournai (indicatif)
+            to_station_uri="http://irail.be/stations/NMBS/008812005",    # Bruxelles-Central (indicatif)
             planned_departure=datetime.now().replace(minute=0, second=0, microsecond=0),
             planned_arrival=datetime.now().replace(minute=0, second=0, microsecond=0) + timedelta(hours=1, minutes=5),
             realtime_departure=None,

@@ -3,7 +3,6 @@ import os
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from sqlalchemy.orm import Session
 from sqlalchemy import text
 from datetime import datetime
 
@@ -15,7 +14,6 @@ Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="SNCB Slac API", version="1.0.0")
 
-# CORS public (lecture seule)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -32,7 +30,6 @@ class JourneyOut(BaseModel):
     planned_departure: datetime
     planned_arrival: datetime
     status: str
-
     class Config:
         from_attributes = True
 
@@ -49,7 +46,6 @@ class StopOut(BaseModel):
     is_extra_stop: bool
     arrival_canceled: bool
     departure_canceled: bool
-
     class Config:
         from_attributes = True
 

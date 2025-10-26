@@ -1,25 +1,20 @@
-# --- frontend/Dockerfile ---
-# Étape deps : installe libc6-compat pour SWC (Next.js)
-FROM node:20-alpine AS deps
+# --- frontend/Dockerfile (Debian slim, sans Alpine/musl) ---
+FROM node:20-bullseye-slim AS deps
 WORKDIR /app
-RUN apk add --no-cache libc6-compat
 COPY package.json package-lock.json* ./
-# Utilise npm ci si lockfile présent; sinon fallback npm install
+# Utilise npm ci si un lockfile existe ; sinon fallback npm install
 RUN if [ -f package-lock.json ]; then npm ci; else npm install --no-audit --fund=false --progress=false; fi
 
-# Étape build : librairies system nécessaires également ici
-FROM node:20-alpine AS builder
+FROM node:20-bullseye-slim AS builder
 WORKDIR /app
-RUN apk add --no-cache libc6-compat
 ENV NEXT_TELEMETRY_DISABLED=1
+# (optionnel) si le build manque de RAM sur ton runner Dokploy, décommente la ligne ci-dessous :
+# ENV NODE_OPTIONS="--max-old-space-size=512"
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
-# (optionnel) limite mémoire si builder est contraint
-# ENV NODE_OPTIONS="--max-old-space-size=512"
 RUN npm run build
 
-# Étape run
-FROM node:20-alpine AS runner
+FROM node:20-bullseye-slim AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1

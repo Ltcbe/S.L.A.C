@@ -29,7 +29,7 @@ services:
       BACKEND_HOST: ${BACKEND_HOST}
       BACKEND_PORT: ${BACKEND_PORT}
       BACKEND_LOG_LEVEL: ${BACKEND_LOG_LEVEL}
-    # ✅ Expose seulement pour le reverse proxy Dokploy
+    # ✅ seulement exposé au réseau interne
     expose:
       - "8000"
 
@@ -54,11 +54,13 @@ services:
     environment:
       NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL}
       TZ: ${TZ}
+      # Aligne la variable d'env PORT du Dockerfile
+      PORT: 3001
     depends_on:
       - backend
-    # ✅ Expose uniquement le port interne
+    # ✅ expose uniquement le port interne 3001 (pas de binding hôte)
     expose:
-      - "3000"
+      - "3001"
 
 volumes:
   dbdata:

@@ -29,8 +29,9 @@ services:
       BACKEND_HOST: ${BACKEND_HOST}
       BACKEND_PORT: ${BACKEND_PORT}
       BACKEND_LOG_LEVEL: ${BACKEND_LOG_LEVEL}
-    ports:
-      - "8000:8000"
+    # ✅ Expose seulement pour le reverse proxy Dokploy
+    expose:
+      - "8000"
 
   worker:
     build: ./worker
@@ -53,10 +54,11 @@ services:
     environment:
       NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL}
       TZ: ${TZ}
-    ports:
-      - "3000:3000"
     depends_on:
       - backend
+    # ✅ Expose uniquement le port interne
+    expose:
+      - "3000"
 
 volumes:
   dbdata:

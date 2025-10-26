@@ -1,7 +1,9 @@
+# --- frontend/Dockerfile ---
 FROM node:20-alpine AS deps
 WORKDIR /app
 COPY package.json package-lock.json* ./
-RUN npm ci
+# Utilise npm ci si un lockfile existe, sinon fallback vers npm install
+RUN if [ -f package-lock.json ]; then npm ci; else npm install --no-audit --fund=false --progress=false; fi
 
 FROM node:20-alpine AS builder
 WORKDIR /app

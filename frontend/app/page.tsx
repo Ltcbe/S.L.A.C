@@ -1,5 +1,6 @@
 'use client'
 import { useEffect, useState } from 'react'
+import './globals.css'
 
 type Journey = {
   id: number
@@ -35,28 +36,36 @@ export default function Home() {
   useEffect(() => { fetchList(status) }, [status])
 
   return (
-    <main className="max-w-4xl mx-auto p-6 space-y-6">
-      <header className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">SNCB Slac</h1>
-        <div className="space-x-2">
-          <button className={`badge ${status==='running'?'bg-blue-800':''}`} onClick={() => setStatus('running')}>En cours</button>
-          <button className={`badge ${status==='completed'?'bg-blue-800':''}`} onClick={() => setStatus('completed')}>Historique</button>
+    <main>
+      <header style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'1.5rem'}}>
+        <h1>SNCB Slac</h1>
+        <div style={{display:'flex',gap:'0.5rem'}}>
+          <button className={status==='running'?'bg-blue-800 badge':'badge'} onClick={() => setStatus('running')}>
+            En cours
+          </button>
+          <button className={status==='completed'?'bg-blue-800 badge':'badge'} onClick={() => setStatus('completed')}>
+            Historique
+          </button>
         </div>
       </header>
 
       {loading && <p>Chargement…</p>}
-      {err && <p className="text-red-400">Erreur : {err}</p>}
+      {err && <p style={{color:'red'}}>Erreur : {err}</p>}
 
       {!loading && !err && (
-        <div className="grid gap-3">
+        <div style={{display:'flex',flexDirection:'column',gap:'0.75rem'}}>
           {items.map(j => (
-            <a key={j.id} href={`/train/${j.id}`} className="card hover:opacity-90">
-              <div className="flex items-center justify-between">
+            <a key={j.id} href={`/train/${j.id}`} className="card" style={{textDecoration:'none'}}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
                 <div>
-                  <div className="text-lg font-semibold">{j.vehicle_name} <span className="badge">{j.status}</span></div>
-                  <div className="opacity-80 text-sm">{new Date(j.planned_departure).toLocaleString()} → {new Date(j.planned_arrival).toLocaleString()}</div>
+                  <div style={{fontSize:'1.1rem',fontWeight:600}}>
+                    {j.vehicle_name} <span className="badge">{j.status}</span>
+                  </div>
+                  <div className="text-sm">
+                    {new Date(j.planned_departure).toLocaleString()} → {new Date(j.planned_arrival).toLocaleString()}
+                  </div>
                 </div>
-                <div className="text-right text-xs opacity-70">{j.vehicle_uri}</div>
+                <div className="text-sm opacity-70">{j.vehicle_uri}</div>
               </div>
             </a>
           ))}

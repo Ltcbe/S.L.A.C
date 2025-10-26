@@ -1,0 +1,16 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg: #0b1020;
+  --card: #11162a;
+  --text: #e6e9f5;
+}
+body { background: var(--bg); color: var(--text); }
+.card {
+  background: var(--card);
+  border-radius: 1rem;
+  padding: 1rem;
+}
+.badge { border: 1px solid #3b4262; border-radius: 9999px; padding: 0.1rem 0.5rem; }

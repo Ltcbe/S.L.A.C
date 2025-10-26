@@ -1,0 +1,63 @@
+version: "3.9"
+
+services:
+  db:
+    image: mariadb:11
+    restart: unless-stopped
+    environment:
+      MARIADB_DATABASE: ${MARIADB_DATABASE}
+      MARIADB_USER: ${MARIADB_USER}
+      MARIADB_PASSWORD: ${MARIADB_PASSWORD}
+      MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD}
+      TZ: ${TZ}
+    volumes:
+      - dbdata:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mariadb -u${MARIADB_USER} -p${MARIADB_PASSWORD} -e 'SELECT 1' ${MARIADB_DATABASE}"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DB_DSN: ${DB_DSN}
+      TZ: ${TZ}
+      BACKEND_HOST: ${BACKEND_HOST}
+      BACKEND_PORT: ${BACKEND_PORT}
+      BACKEND_LOG_LEVEL: ${BACKEND_LOG_LEVEL}
+    ports:
+      - "8000:8000"
+
+  worker:
+    build: ./worker
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DB_DSN: ${DB_DSN}
+      TZ: ${TZ}
+      FROM_STATION: ${FROM_STATION}
+      TO_STATION: ${TO_STATION}
+      IRAIL_LANG: ${IRAIL_LANG}
+      POLL_SECONDS: ${POLL_SECONDS}
+      USER_AGENT: ${USER_AGENT}
+
+  frontend:
+    build: ./frontend
+    restart: unless-stopped
+    environment:
+      NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL}
+      TZ: ${TZ}
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+
+volumes:
+  dbdata:

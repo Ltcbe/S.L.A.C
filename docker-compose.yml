@@ -16,6 +16,10 @@ services:
       interval: 15s
       timeout: 5s
       retries: 10
+    networks:
+      appnet:
+        aliases:
+          - db
 
   backend:
     build: ./backend
@@ -31,6 +35,10 @@ services:
       BACKEND_LOG_LEVEL: ${BACKEND_LOG_LEVEL}
     expose:
       - "8000"
+    networks:
+      appnet:
+        aliases:
+          - backend
 
   worker:
     build: ./worker
@@ -46,18 +54,31 @@ services:
       IRAIL_LANG: ${IRAIL_LANG}
       POLL_SECONDS: ${POLL_SECONDS}
       USER_AGENT: ${USER_AGENT}
+    networks:
+      appnet:
+        aliases:
+          - worker
 
   frontend:
     build: ./frontend
     restart: unless-stopped
     environment:
-      NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL}
+      # On utilise le proxy Next → backend interne
+      BACKEND_URL: ${BACKEND_URL:-http://backend:8000}
       TZ: ${TZ}
-      PORT: 3000   # IMPORTANT: 3000, aligné avec Dokploy
+      PORT: 3000
     depends_on:
       - backend
     expose:
-      - "3000"    # Exposé en interne ; pas de binding hôte (le gateway Dokploy s’en charge)
+      - "3000"
+    networks:
+      appnet:
+        aliases:
+          - frontend
 
 volumes:
   dbdata:
+
+networks:
+  appnet:
+    driver: bridge

@@ -11,7 +11,7 @@ type Journey = {
   status: 'running' | 'completed'
 }
 
-const API = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
+const API = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://backend:8000'
 
 export default function Home() {
   const [status, setStatus] = useState<'running'|'completed'|''>('running')

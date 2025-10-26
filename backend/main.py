@@ -1,3 +1,4 @@
+# --- backend/main.py ---
 import os
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -6,15 +7,15 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text
 from datetime import datetime
 
-from .database import SessionLocal, engine
-from .models import Base, Journey, JourneyStop
-from .crud import list_journeys, get_journey_with_stops
+from database import SessionLocal, engine
+from models import Base, Journey, JourneyStop
+from crud import list_journeys, get_journey_with_stops
 
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="SNCB Slac API", version="1.0.0")
 
-# CORS public
+# CORS public (lecture seule)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],

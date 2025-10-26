@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react'
 import { useParams } from 'next/navigation'
 
-const API = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
+const API = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://backend:8000'
 
 export default function TrainPage() {
   const params = useParams()

@@ -106,9 +106,9 @@ def ts_to_dt(ts: Optional[str | int]) -> Optional[datetime]:
 def normalize_vehicle_id(raw: str) -> List[str]:
     """
     Normalise un identifiant véhicule iRail en variantes compatibles /vehicle.
-    - Si raw commence par http(s):// -> on garde tel quel.
-    - Si raw ressemble à 'BE.NMBS.IC3232' -> on fabrique 'http://irail.be/vehicle/IC3232' + variantes.
-    - Si raw ressemble déjà à 'IC3232' -> on fabrique l'URI.
+    - URI complète (http(s)://...) -> garder + extraire code si possible
+    - 'BE.NMBS.IC3232' -> 'http://irail.be/vehicle/IC3232', 'IC3232', 'BE.NMBS.IC3232'
+    - 'IC3232' -> 'http://irail.be/vehicle/IC3232', 'IC3232', 'BE.NMBS.IC3232'
     Retourne une liste ordonnée de candidats à essayer.
     """
     candidates: List[str] = []
@@ -117,22 +117,21 @@ def normalize_vehicle_id(raw: str) -> List[str]:
 
     r = raw.strip()
 
-    # Déjà une URI complète
+    # Déjà URI complète
     if r.startswith("http://") or r.startswith("https://"):
         candidates.append(r)
-        # Ajoute le code simple s'il existe (fin d'URI)
         m = re.search(r"/vehicle/([A-Za-z]+[0-9]+)$", r)
         if m:
             code = m.group(1)
-            candidates.append(code)  # IC3232
-            candidates.append(f"BE.NMBS.{code}")  # BE.NMBS.IC3232
+            candidates.append(code)
+            candidates.append(f"BE.NMBS.{code}")
         return candidates
 
-    # BE.NMBS.IC3232 -> IC3232
+    # BE.NMBS.IC3232
     m = re.match(r"^BE\.NMBS\.([A-Za-z]+[0-9]+)$", r)
     if m:
-        code = m.group(1)  # IC3232
-        candidates.append(f"http://irail.be/vehicle/{code}")  # préférée
+        code = m.group(1)
+        candidates.append(f"http://irail.be/vehicle/{code}")
         candidates.append(code)
         candidates.append(r)
         return candidates
@@ -144,12 +143,11 @@ def normalize_vehicle_id(raw: str) -> List[str]:
         candidates.append(f"BE.NMBS.{r}")
         return candidates
 
-    # Dernier recours : renvoyer brut
     candidates.append(r)
     return candidates
 
 def list_connections(_from: str, _to: str) -> List[Dict[str, Any]]:
-    """Appelle /connections et retourne une liste de connexions (dicts)."""
+    """Appelle /connections et retourne une liste de connexions."""
     now_local = datetime.now(LOCAL_TZ)
     params = {
         "from": _from,
@@ -176,9 +174,7 @@ def list_connections(_from: str, _to: str) -> List[Dict[str, Any]]:
     return conns
 
 def vehicle_stops(vehicle_id_raw: str, service_date: date) -> List[Dict[str, Any]]:
-    """
-    Appelle /vehicle et normalise la liste des arrêts. Essaie plusieurs variantes d'ID.
-    """
+    """Appelle /vehicle et normalise la liste des arrêts. Essaie plusieurs variantes d'ID."""
     date_str = service_date.strftime("%Y%m%d")
     tried: List[str] = []
     for vid in normalize_vehicle_id(vehicle_id_raw):
@@ -192,8 +188,8 @@ def vehicle_stops(vehicle_id_raw: str, service_date: date) -> List[Dict[str, Any
                 stops = [stops]
             if not isinstance(stops, list):
                 stops = []
-            out: List[Dict[str, Any]] = []
 
+            out: List[Dict[str, Any]] = []
             for idx, s in enumerate(stops, start=1):
                 if not isinstance(s, dict):
                     continue
@@ -201,7 +197,10 @@ def vehicle_stops(vehicle_id_raw: str, service_date: date) -> List[Dict[str, Any
                 stationinfo = s.get("stationinfo") if isinstance(s.get("stationinfo"), dict) else {}
                 station_uri = stationinfo.get("@id") if isinstance(stationinfo, dict) else ""
                 plat = s.get("platform")
-                platform = plat.get("$") or plat.get("name") if isinstance(plat, dict) else (plat if isinstance(plat, str) else None)
+                platform = (
+                    plat.get("$") or plat.get("name")
+                    if isinstance(plat, dict) else (plat if isinstance(plat, str) else None)
+                )
                 planned_arrival = ts_to_dt(s.get("time")) if s.get("arrival") else None
                 planned_departure = ts_to_dt(s.get("time")) if s.get("departure") else None
                 realtime_arrival = ts_to_dt(s.get("realtime")) if s.get("arrival") else None
@@ -228,6 +227,7 @@ def vehicle_stops(vehicle_id_raw: str, service_date: date) -> List[Dict[str, Any
                     "arrival_canceled": as_bool(s.get("canceled")) if s.get("arrival") else False,
                     "departure_canceled": as_bool(s.get("canceled")) if s.get("departure") else False,
                 })
+
             if log.isEnabledFor(logging.DEBUG):
                 log.debug("vehicle %s (tried=%s): %d stop(s)", vehicle_id_raw, tried, len(out))
             return out
@@ -410,7 +410,7 @@ def run_once() -> None:
                     ))
 
                 j = Journey(
-                    vehicle_uri        = normalize_vehicle_id(vehicle_id_raw)[0],  # stocke la forme préférée (URI si possible)
+                    vehicle_uri        = normalize_vehicle_id(vehicle_id_raw)[0],  # forme préférée (URI si possible)
                     vehicle_name       = str(vehicle_name)[:64] if vehicle_name else normalize_vehicle_id(vehicle_id_raw)[0],
                     service_date       = service_d,
                     from_station_uri   = from_uri or "",

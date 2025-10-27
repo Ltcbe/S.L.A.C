@@ -2,113 +2,107 @@ services:
   db:
     image: mariadb:11
     container_name: sncb-db
-    restart: unless-stopped
     environment:
       MARIADB_DATABASE: sncbslac
       MARIADB_USER: app
       MARIADB_PASSWORD: change_me
-      MARIADB_ROOT_PASSWORD: change_root
+      MARIADB_ROOT_PASSWORD: root_change_me
       TZ: Europe/Brussels
     volumes:
       - dbdata:/var/lib/mysql
     healthcheck:
-      test: ["CMD-SHELL", "mariadb-admin ping -h127.0.0.1 --silent"]
+      test: ["CMD-SHELL", "mysqladmin ping -u$$MARIADB_USER -p$$MARIADB_PASSWORD -h 127.0.0.1 --silent"]
       interval: 10s
       timeout: 5s
       retries: 10
-      start_period: 40s
     networks:
       - internal
 
   backend:
-    container_name: sncb-backend
     build:
       context: .
       dockerfile: backend/Dockerfile
-    restart: unless-stopped
+    image: sncb-backend:local
+    container_name: sncb-backend
     depends_on:
       db:
         condition: service_healthy
     environment:
       DB_DSN: mysql+pymysql://app:change_me@db:3306/sncbslac
-      HOST: 0.0.0.0
-      PORT: 8000
       TZ: Europe/Brussels
       LOG_LEVEL: INFO
-    # on garde un port local pour debug uniquement (PAS exposé par Traefik)
-    ports:
-      - "18000:8000"
+      DEBUG: "false"
+    expose:
+      - "8000"
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8000/healthz || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8000/healthz || curl -fsS http://127.0.0.1:8000/healthz"]
       interval: 10s
       timeout: 5s
-      retries: 6
-      start_period: 20s
+      retries: 10
     networks:
       - internal
-
-  frontend:
-    container_name: sncb-frontend
-    build:
-      context: .
-      dockerfile: frontend/Dockerfile
-    restart: unless-stopped
-    depends_on:
-      backend:
-        condition: service_healthy
-    environment:
-      NODE_ENV: production
-      PORT: 3000
-      HOST: 0.0.0.0
-      TZ: Europe/Brussels
-      NEXT_PUBLIC_API_BASE_URL: https://sncb.terminalcommun.be/api
-    # ❌ pas de ports: on laisse Traefik publier en 80/443
-    healthcheck:
-      test: ["CMD-SHELL", "node -e \"require('http').get('http://127.0.0.1:3000/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))\""]
-      interval: 10s
-      timeout: 5s
-      retries: 6
-      start_period: 20s
-    labels:
-      # ✅ Active l'exposition à Traefik
-      - "traefik.enable=true"
-      # ✅ Router pour le domaine
-      - "traefik.http.routers.sncb-frontend.rule=Host(`sncb.terminalcommun.be`)"
-      - "traefik.http.routers.sncb-frontend.entrypoints=websecure"
-      - "traefik.http.routers.sncb-frontend.tls=true"
-      # ✅ Service: Traefik doit cibler le port 3000 du conteneur
-      - "traefik.http.services.sncb-frontend.loadbalancer.server.port=3000"
-    networks:
-      - internal
-      - dokploy   # ⚠️ indispensable pour que Traefik voie le service
 
   worker:
-    container_name: sncb-worker
     build:
       context: .
       dockerfile: worker/Dockerfile
-    restart: unless-stopped
+    image: sncb-worker:local
+    container_name: sncb-worker
     depends_on:
       db:
         condition: service_healthy
     environment:
-      DB_DSN: mysql+pymysql://app:change_me@db:3306/sncbslac
       FROM_STATION: Tournai
       TO_STATION: Bruxelles-Central
       IRAIL_LANG: fr
       POLL_SECONDS: "120"
       USER_AGENT: SNCB-Slac/1.0 (+https://sncb.terminalcommun.be)
+      DB_DSN: mysql+pymysql://app:change_me@db:3306/sncbslac
       TZ: Europe/Brussels
-      DEBUG: "false"
       LOG_LEVEL: INFO
+      DEBUG: "false"
     networks:
       - internal
 
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    image: sncb-frontend:local
+    container_name: sncb-frontend
+    depends_on:
+      backend:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      HOST: 0.0.0.0
+      TZ: Europe/Brussels
+      # le front appelle le back via Traefik :
+      NEXT_PUBLIC_API_BASE_URL: https://sncb.terminalcommun.be/api
+    expose:
+      - "3000"
+    # (optionnel) accès direct sans Traefik pour debug local
+    ports:
+      - "13000:3000"
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: "dokploy-network"
+      traefik.http.routers.sncb-frontend.rule: "Host(`sncb.terminalcommun.be`)"
+      traefik.http.routers.sncb-frontend.entrypoints: "websecure"
+      traefik.http.routers.sncb-frontend.tls: "true"
+      traefik.http.services.sncb-frontend.loadbalancer.server.port: "3000"
+    networks:
+      - internal
+      - proxy
+
 networks:
   internal:
-  dokploy:        # réseau externe géré par Dokploy/Traefik
+    name: sncb-qygxwl_internal
+    driver: bridge
+  proxy:
     external: true
-    name: dokploy
+    name: dokploy-network
 
 volumes:
   dbdata:

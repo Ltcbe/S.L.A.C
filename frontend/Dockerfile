@@ -33,25 +33,24 @@ ENV HOST=0.0.0.0
 
 # Outils utiles (diag/health)
 RUN apt-get update -y \
- && apt-get install -y --no-install-recommends curl procps iproute2 \
+ && apt-get install -y --no-install-recommends curl iproute2 procps libc-bin \
  && rm -rf /var/lib/apt/lists/*
 
-# On place le bundle standalone dans /app/standalone
+# Bundle standalone + assets
 WORKDIR /app
 COPY --from=builder /app/.next/standalone /app/standalone
-# IMPORTANT : on met les assets là où server.js s'attend à les trouver
 COPY --from=builder /app/.next/static     /app/standalone/.next/static
 COPY --from=builder /app/public           /app/standalone/public
 
-# Sanity checks
-RUN test -f /app/standalone/server.js && ls -la /app/standalone | head -n 50
+# Sanity check
+RUN test -f /app/standalone/server.js
 
-# Healthcheck interne
+# Healthcheck: cible l'IP du conteneur (certaines builds n'écoutent pas sur 127.0.0.1)
 HEALTHCHECK --interval=20s --timeout=3s --start-period=10s --retries=3 \
-  CMD curl -fsS http://127.0.0.1:${PORT}/health || exit 1
+  CMD IP=$(hostname -i | awk '{print $1}'); curl -fsS "http://${IP}:${PORT}/health" || exit 1
 
 EXPOSE 3000
 
-# On lance depuis le DOSSIER standalone (chemins relatifs corrects)
+# Lancement depuis le dossier standalone
 WORKDIR /app/standalone
 CMD ["node", "server.js"]

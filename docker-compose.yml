@@ -1,3 +1,5 @@
+version: "3.9"
+
 services:
   db:
     image: mariadb:11
@@ -19,7 +21,10 @@ services:
       - internal
 
   backend:
-    image: sncb-backend:latest
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    image: sncb-backend:local
     container_name: sncb-backend
     depends_on:
       db:
@@ -28,22 +33,26 @@ services:
       - TZ=Europe/Brussels
       - DB_DSN=mysql+pymysql://app:change_me@db:3306/sncbslac
       - LOG_LEVEL=INFO
-    # Exposé seulement via Traefik
+      - DEBUG=false
     labels:
       - traefik.enable=true
-      # Route /api -> backend: strip le préfixe afin que /api/healthz => /healthz côté FastAPI
+      # Route /api -> backend et suppression du préfixe /api
       - traefik.http.routers.sncb-api.rule=Host(`sncb.terminalcommun.be`) && PathPrefix(`/api`)
       - traefik.http.routers.sncb-api.entrypoints=websecure
       - traefik.http.routers.sncb-api.tls=true
       - traefik.http.services.sncb-api.loadbalancer.server.port=8000
-      - traefik.http.middlewares.sncb-api-stripprefix.stripprefix.prefixes=/api
-      - traefik.http.routers.sncb-api.middlewares=sncb-api-stripprefix
+      - traefik.http.middlewares.sncb-api-strip.stripprefix.prefixes=/api
+      - traefik.http.routers.sncb-api.middlewares=sncb-api-strip
     networks:
       - internal
-      - proxy   # <— réseau Traefik
+      - proxy
+    restart: unless-stopped
 
   frontend:
-    image: sncb-frontend:latest
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    image: sncb-frontend:local
     container_name: sncb-frontend
     environment:
       - TZ=Europe/Brussels
@@ -51,7 +60,6 @@ services:
       - PORT=3000
       - HOST=0.0.0.0
       - NEXT_PUBLIC_API_BASE_URL=https://sncb.terminalcommun.be/api
-    # Exposé seulement via Traefik
     labels:
       - traefik.enable=true
       - traefik.http.routers.sncb-web.rule=Host(`sncb.terminalcommun.be`)
@@ -60,10 +68,14 @@ services:
       - traefik.http.services.sncb-web.loadbalancer.server.port=3000
     networks:
       - internal
-      - proxy   # <— réseau Traefik
+      - proxy
+    restart: unless-stopped
 
   worker:
-    image: sncb-worker:latest
+    build:
+      context: .
+      dockerfile: worker/Dockerfile
+    image: sncb-worker:local
     container_name: sncb-worker
     depends_on:
       db:
@@ -80,6 +92,7 @@ services:
       - LOG_LEVEL=INFO
     networks:
       - internal
+    restart: unless-stopped
 
 volumes:
   dbdata:
@@ -88,4 +101,7 @@ networks:
   internal:
   proxy:
     external: true
-    name: TRAEFIK_NETWORK_NAME   # <<< remplace par le nom réel (ex: dokploy)
+    # ⚠️ Vérifie le nom exact du réseau Traefik/Dokploy avec :
+    # docker network ls | grep dokploy
+    # et mets-le ici si besoin
+    name: dokploy

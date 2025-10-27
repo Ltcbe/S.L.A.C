@@ -7,64 +7,69 @@ services:
       MARIADB_DATABASE: sncbslac
       MARIADB_USER: app
       MARIADB_PASSWORD: change_me
-      MARIADB_ROOT_PASSWORD: change_me_root
+      MARIADB_ROOT_PASSWORD: change_root
     volumes:
       - dbdata:/var/lib/mysql
-    networks:
-      - internal
     healthcheck:
-      test: ["CMD-SHELL", "mariadb -u${MARIADB_USER} -p${MARIADB_PASSWORD} -e 'SELECT 1' ${MARIADB_DATABASE} >/dev/null 2>&1 || exit 1"]
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uapp", "-pchange_me"]
       interval: 10s
       timeout: 5s
-      retries: 10
+      retries: 6
+      start_period: 20s
+    networks:
+      - internal
 
   backend:
-    build:
-      context: .
-      dockerfile: backend/Dockerfile
     image: sncb-backend:local
     container_name: sncb-backend
     restart: unless-stopped
-    depends_on:
-      db:
-        condition: service_healthy
     environment:
-      # DB
       DB_DSN: mysql+pymysql://app:change_me@db:3306/sncbslac
       MARIADB_HOST: db
-      MARIADB_PORT: 3306
+      MARIADB_PORT: "3306"
       MARIADB_DATABASE: sncbslac
       MARIADB_USER: app
       MARIADB_PASSWORD: change_me
-      # Logs
+      TZ: Europe/Brussels
       LOG_LEVEL: INFO
       DEBUG: "false"
-      TZ: Europe/Brussels
-      # Serveur
       HOST: 0.0.0.0
       PORT: "8000"
+    depends_on:
+      db:
+        condition: service_healthy
     ports:
-      - "18000:8000"     # debug local
-    networks:
-      - internal
+      - "18000:8000"
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8000/healthz || curl -fsS http://127.0.0.1:8000/healthz"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=5).status==200 else 1)"]
       interval: 10s
       timeout: 5s
-      retries: 12
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.sncb-backend.rule=Host(`sncb.terminalcommun.be`) && PathPrefix(`/api`)"
-      - "traefik.http.routers.sncb-backend.entrypoints=websecure"
-      - "traefik.http.routers.sncb-backend.tls=true"
-      - "traefik.http.services.sncb-backend.loadbalancer.server.port=8000"
-      - "traefik.http.middlewares.sncb-backend-strip.stripprefix.prefixes=/api"
-      - "traefik.http.routers.sncb-backend.middlewares=sncb-backend-strip"
+      retries: 6
+      start_period: 15s
+    networks:
+      - internal
+
+  worker:
+    image: sncb-worker:local
+    container_name: sncb-worker
+    restart: unless-stopped
+    environment:
+      DB_DSN: mysql+pymysql://app:change_me@db:3306/sncbslac
+      FROM_STATION: Tournai
+      TO_STATION: Bruxelles-Central
+      IRAIL_LANG: fr
+      POLL_SECONDS: "120"
+      USER_AGENT: SNCB-Slac/1.0 (+https://sncb.terminalcommun.be)
+      TZ: Europe/Brussels
+      LOG_LEVEL: INFO
+      DEBUG: "false"
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - internal
 
   frontend:
-    build:
-      context: .
-      dockerfile: frontend/Dockerfile
     image: sncb-frontend:local
     container_name: sncb-frontend
     restart: unless-stopped
@@ -72,55 +77,27 @@ services:
       NODE_ENV: production
       PORT: "3000"
       HOST: 0.0.0.0
-      # En prod via Traefik, garde /api (relatif), c’est plus simple local + prod
+      # IMPORTANT: en local via compose, on expose /api et Traefik (ou le LB) fera le reste
       NEXT_PUBLIC_API_BASE_URL: /api
       TZ: Europe/Brussels
     depends_on:
       backend:
         condition: service_healthy
     ports:
-      - "13000:3000"     # debug local
-    networks:
-      - internal
+      - "13000:3000"
+    # Healthcheck sans curl/wget, avec start_period pour laisser Next démarrer
     healthcheck:
       test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:3000/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
-      interval: 15s
+      interval: 10s
       timeout: 5s
-      retries: 5
-
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.sncb-frontend.rule=Host(`sncb.terminalcommun.be`)"
-      - "traefik.http.routers.sncb-frontend.entrypoints=websecure"
-      - "traefik.http.routers.sncb-frontend.tls=true"
-      - "traefik.http.services.sncb-frontend.loadbalancer.server.port=3000"
-
-  worker:
-    build:
-      context: .
-      dockerfile: worker/Dockerfile
-    image: sncb-worker:local
-    container_name: sncb-worker
-    restart: unless-stopped
-    depends_on:
-      db:
-        condition: service_healthy
-    environment:
-      FROM_STATION: Tournai
-      TO_STATION: Bruxelles-Central
-      IRAIL_LANG: fr
-      POLL_SECONDS: "120"
-      USER_AGENT: "SNCB-Slac/1.0 (+https://sncb.terminalcommun.be)"
-      TZ: Europe/Brussels
-      DEBUG: "false"
-      LOG_LEVEL: INFO
-      # DB
-      DB_DSN: mysql+pymysql://app:change_me@db:3306/sncbslac
+      retries: 6
+      start_period: 25s
     networks:
       - internal
-
-networks:
-  internal:
 
 volumes:
   dbdata:
+
+networks:
+  internal:
+    driver: bridge

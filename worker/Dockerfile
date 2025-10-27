@@ -1,22 +1,39 @@
-FROM python:3.11-slim
+# ====== base Python ======
+FROM python:3.11-slim AS base
 
-# OS deps minimes (facultatif)
-RUN apt-get update -y && apt-get install -y --no-install-recommends curl ca-certificates && rm -rf /var/lib/apt/lists/*
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
 
-# Répertoire app
 WORKDIR /app
 
-# Dépendances
-COPY worker/requirements.txt ./requirements.txt
-RUN pip install --no-cache-dir -r requirements.txt
+# deps système minimales (certificats TLS, tzdata)
+RUN apt-get update -y \
+ && apt-get install -y --no-install-recommends ca-certificates tzdata curl \
+ && rm -rf /var/lib/apt/lists/*
 
-# Code
-COPY worker/ ./worker/
-COPY shared/ ./shared/
+# ====== install deps Python ======
+# On copie uniquement les requirements pour profiter du cache Docker
+COPY worker/requirements.txt /app/worker/requirements.txt
+RUN pip install --no-cache-dir -r /app/worker/requirements.txt
 
-# PYTHONPATH pour importer worker & shared
-ENV PYTHONPATH=/app
-ENV PYTHONUNBUFFERED=1
+# ====== copie du code ======
+# IMPORTANT: le contexte de build (docker-compose) est à la racine du repo
+# On peut donc copier ./shared et ./worker
+COPY shared /app/shared
+COPY worker /app/worker
 
-# Démarrage
-CMD ["python", "-m", "worker.main"]
+# Sanity: assure la présence du main.py et modules partagés
+RUN test -f /app/worker/main.py
+
+# Variables par défaut (peuvent être écrasées par compose)
+ENV TZ=Europe/Brussels \
+    DEBUG=false \
+    LOG_LEVEL=INFO
+
+# Healthcheck: tant que le process tourne, on considère OK (le worker est un daemon)
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD pgrep -f "python /app/worker/main.py" >/dev/null || exit 1
+
+# Lancement
+CMD ["python", "/app/worker/main.py"]

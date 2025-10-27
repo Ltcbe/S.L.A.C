@@ -3,106 +3,102 @@ services:
     image: mariadb:11
     container_name: sncb-db
     environment:
+      MARIADB_ROOT_PASSWORD: root
       MARIADB_DATABASE: sncbslac
       MARIADB_USER: app
       MARIADB_PASSWORD: change_me
-      MARIADB_ROOT_PASSWORD: root_change_me
       TZ: Europe/Brussels
     volumes:
       - dbdata:/var/lib/mysql
     healthcheck:
-      test: ["CMD-SHELL", "mysqladmin ping -u$$MARIADB_USER -p$$MARIADB_PASSWORD -h 127.0.0.1 --silent"]
+      test: ["CMD-SHELL", "mariadb -h127.0.0.1 -uapp -pchange_me -e 'SELECT 1' sncbslac"]
       interval: 10s
       timeout: 5s
-      retries: 10
+      retries: 5
+      start_period: 15s
     networks:
       - internal
 
   backend:
     build:
-      context: .
-      dockerfile: backend/Dockerfile
-    image: sncb-backend:local
+      context: ./backend
     container_name: sncb-backend
     depends_on:
       db:
         condition: service_healthy
     environment:
-      DB_DSN: mysql+pymysql://app:change_me@db:3306/sncbslac
-      TZ: Europe/Brussels
-      LOG_LEVEL: INFO
-      DEBUG: "false"
-    expose:
-      - "8000"
-    healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8000/healthz || curl -fsS http://127.0.0.1:8000/healthz"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
+      - TZ=Europe/Brussels
+      - MARIADB_HOST=db
+      - MARIADB_PORT=3306
+      - MARIADB_DATABASE=sncbslac
+      - MARIADB_USER=app
+      - MARIADB_PASSWORD=change_me
+    ports:
+      - "18000:8000"
     networks:
       - internal
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8000/healthz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
   worker:
     build:
-      context: .
-      dockerfile: worker/Dockerfile
-    image: sncb-worker:local
+      context: ./worker
     container_name: sncb-worker
     depends_on:
       db:
         condition: service_healthy
     environment:
-      FROM_STATION: Tournai
-      TO_STATION: Bruxelles-Central
-      IRAIL_LANG: fr
-      POLL_SECONDS: "120"
-      USER_AGENT: SNCB-Slac/1.0 (+https://sncb.terminalcommun.be)
-      DB_DSN: mysql+pymysql://app:change_me@db:3306/sncbslac
-      TZ: Europe/Brussels
-      LOG_LEVEL: INFO
-      DEBUG: "false"
+      - TZ=Europe/Brussels
+      - MARIADB_HOST=db
+      - MARIADB_PORT=3306
+      - MARIADB_DATABASE=sncbslac
+      - MARIADB_USER=app
+      - MARIADB_PASSWORD=change_me
     networks:
       - internal
 
   frontend:
     build:
-      context: .
-      dockerfile: frontend/Dockerfile
-    image: sncb-frontend:local
+      context: ./frontend
     container_name: sncb-frontend
     depends_on:
       backend:
         condition: service_healthy
     environment:
-      NODE_ENV: production
-      PORT: "3000"
-      HOST: 0.0.0.0
-      TZ: Europe/Brussels
-      # le front appelle le back via Traefik :
-      NEXT_PUBLIC_API_BASE_URL: https://sncb.terminalcommun.be/api
-    expose:
-      - "3000"
-    # (optionnel) accès direct sans Traefik pour debug local
+      - NODE_ENV=production
+      - HOST=0.0.0.0
+      - PORT=3000
+      - NEXT_PUBLIC_API_BASE_URL=https://sncb.terminalcommun.be/api
+      - TZ=Europe/Brussels
     ports:
       - "13000:3000"
-    labels:
-      traefik.enable: "true"
-      traefik.docker.network: "dokploy-network"
-      traefik.http.routers.sncb-frontend.rule: "Host(`sncb.terminalcommun.be`)"
-      traefik.http.routers.sncb-frontend.entrypoints: "websecure"
-      traefik.http.routers.sncb-frontend.tls: "true"
-      traefik.http.services.sncb-frontend.loadbalancer.server.port: "3000"
     networks:
       - internal
       - proxy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=dokploy-network"
+      - "traefik.http.routers.sncb-frontend.rule=Host(`sncb.terminalcommun.be`)"
+      - "traefik.http.routers.sncb-frontend.entrypoints=websecure"
+      - "traefik.http.routers.sncb-frontend.tls.certresolver=letsencrypt"
+      - "traefik.http.services.sncb-frontend.loadbalancer.server.port=3000"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:3000/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+volumes:
+  dbdata:
 
 networks:
   internal:
-    name: sncb-qygxwl_internal
     driver: bridge
   proxy:
     external: true
     name: dokploy-network
-
-volumes:
-  dbdata:

@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   db:
     image: mariadb:11.4
@@ -20,8 +18,8 @@ services:
 
   backend:
     build:
-      context: ./backend
-      dockerfile: Dockerfile
+      context: .                 # <<< IMPORTANT : racine du dépôt
+      dockerfile: backend/Dockerfile
     container_name: ${COMPOSE_PROJECT_NAME:-sncb}-backend-1
     environment:
       DB_DSN: mysql+pymysql://app:change_me@db:3306/sncbslac
@@ -33,14 +31,14 @@ services:
       db:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8000/healthz"]
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8000/healthz || curl -fsS http://127.0.0.1:8000/healthz"]
       interval: 20s
       timeout: 3s
       retries: 5
 
   worker:
     build:
-      context: .                # <-- IMPORTANT: contexte = racine du repo
+      context: .                 # <<< IMPORTANT : racine du dépôt
       dockerfile: worker/Dockerfile
     container_name: ${COMPOSE_PROJECT_NAME:-sncb}-worker-1
     environment:

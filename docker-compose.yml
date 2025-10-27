@@ -1,100 +1,93 @@
-name: sncb-slac
-
-networks:
-  sncb_net:
-    driver: bridge
-
-volumes:
-  dbdata:
-
 services:
   db:
     image: mariadb:11
-    restart: unless-stopped
+    container_name: sncb-db
     environment:
-      MARIADB_DATABASE: ${MARIADB_DATABASE:-sncbslac}
-      MARIADB_USER: ${MARIADB_USER:-app}
-      MARIADB_PASSWORD: ${MARIADB_PASSWORD:-change_me}
-      MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD:-root_change_me}
-      TZ: ${TZ:-Europe/Brussels}
-    command: >
-      --character-set-server=utf8mb4
-      --collation-server=utf8mb4_unicode_ci
-      --skip-ssl
+      MARIADB_DATABASE: sncbslac
+      MARIADB_USER: app
+      MARIADB_PASSWORD: change_me
+      MARIADB_ROOT_PASSWORD: change_me_root
+      TZ: Europe/Brussels
     volumes:
       - dbdata:/var/lib/mysql
-    networks:
-      - sncb_net
+    networks: [sncb_net]
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-u", "${MARIADB_USER:-app}", "-p${MARIADB_PASSWORD:-change_me}"]
-      interval: 15s
-      timeout: 5s
-      retries: 10
+      test: ["CMD-SHELL", "mariadb-admin ping -uroot -p$MARIADB_ROOT_PASSWORD --silent"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
 
   backend:
     build:
       context: .
       dockerfile: backend/Dockerfile
-    restart: unless-stopped
+    container_name: sncb-backend
     environment:
-      TZ: ${TZ:-Europe/Brussels}
-      DB_DSN: ${DB_DSN:-mysql+pymysql://app:change_me@db:3306/sncbslac}
+      TZ: Europe/Brussels
+      DB_DSN: mysql+pymysql://app:change_me@db:3306/sncbslac
       BACKEND_HOST: 0.0.0.0
       BACKEND_PORT: 8000
-      BACKEND_LOG_LEVEL: ${LOG_LEVEL:-INFO}
-      DEBUG: ${DEBUG:-false}
+      BACKEND_LOG_LEVEL: info
     depends_on:
       db:
         condition: service_healthy
-    networks:
-      - sncb_net
+    networks: [sncb_net]
+    expose:
+      - "8000"
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8000/healthz || exit 1"]
-      interval: 20s
+      interval: 10s
       timeout: 5s
-      retries: 6
+      retries: 12
 
   worker:
     build:
       context: .
       dockerfile: worker/Dockerfile
-    restart: unless-stopped
+    container_name: sncb-worker
     environment:
-      TZ: ${TZ:-Europe/Brussels}
-      DB_DSN: ${DB_DSN:-mysql+pymysql://app:change_me@db:3306/sncbslac}
-      FROM_STATION: ${FROM_STATION:-Tournai}
-      TO_STATION: ${TO_STATION:-Bruxelles-Central}
-      IRAIL_LANG: ${IRAIL_LANG:-fr}
-      POLL_SECONDS: ${POLL_SECONDS:-120}
-      USER_AGENT: ${USER_AGENT:-SNCB-Slac/1.0 (+https://sncb.terminalcommun.be)}
-      DEBUG: ${DEBUG:-false}
+      TZ: Europe/Brussels
+      DB_DSN: mysql+pymysql://app:change_me@db:3306/sncbslac
+      FROM_STATION: Tournai
+      TO_STATION: Bruxelles-Central
+      IRAIL_LANG: fr
+      POLL_SECONDS: "120"
+      USER_AGENT: SNCB-Slac/1.0 (+https://sncb.terminalcommun.be)
+      DEBUG: "false"
+      LOG_LEVEL: INFO
     depends_on:
       db:
         condition: service_healthy
-    networks:
-      - sncb_net
+    networks: [sncb_net]
+    restart: unless-stopped
 
   frontend:
-    # IMPORTANT : on laisse le contexte à la racine "."
-    # Le Dockerfile ci-dessous copie explicitement depuis frontend/
     build:
       context: .
       dockerfile: frontend/Dockerfile
-    restart: unless-stopped
+    container_name: sncb-frontend
     environment:
-      TZ: ${TZ:-Europe/Brussels}
+      TZ: Europe/Brussels
       NODE_ENV: production
-      PORT: 3000
       HOST: 0.0.0.0
+      PORT: "3000"
+      # Utilisé par le code Next pour appeler le backend via le proxy /api/* (Traefik -> frontend -> backend)
       NEXT_PUBLIC_API_BASE_URL: https://sncb.terminalcommun.be/api
-      BACKEND_INTERNAL_URL: http://backend:8000
     depends_on:
       backend:
-        condition: service_started
-    networks:
-      - sncb_net
+        condition: service_healthy
+    networks: [sncb_net]
+    expose:
+      - "3000"
     healthcheck:
-      test: ["CMD-SHELL", "IP=$(hostname -i | awk '{print $1}'); curl -fsS \"http://$IP:3000/health\" || exit 1"]
-      interval: 20s
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:3000/health || exit 1"]
+      interval: 10s
       timeout: 5s
-      retries: 6
+      retries: 30
+
+volumes:
+  dbdata:
+
+networks:
+  sncb_net:
+    driver: bridge

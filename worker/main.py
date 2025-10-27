@@ -26,7 +26,6 @@ POLL_SECONDS = int(os.getenv("POLL_SECONDS", "120"))
 USER_AGENT = os.getenv("USER_AGENT", "SNCB-Slac/1.0 (+https://sncb.terminalcommun.be)")
 TZ = os.getenv("TZ", "Europe/Brussels")
 
-# Active le DEBUG si DEBUG=true/1/yes OU si LOG_LEVEL=DEBUG
 DEBUG = os.getenv("DEBUG", "false").lower() in ("1", "true", "yes")
 LOG_LEVEL_ENV = os.getenv("LOG_LEVEL", "INFO").upper()
 LOG_LEVEL = logging.DEBUG if (DEBUG or LOG_LEVEL_ENV == "DEBUG") else getattr(logging, LOG_LEVEL_ENV, logging.INFO)
@@ -105,11 +104,10 @@ def ts_to_dt(ts: Optional[str | int]) -> Optional[datetime]:
 
 def normalize_vehicle_id(raw: str) -> List[str]:
     """
-    Normalise un identifiant véhicule iRail en variantes compatibles /vehicle.
-    - URI complète (http(s)://...) -> garder + extraire code si possible
-    - 'BE.NMBS.IC3232' -> 'http://irail.be/vehicle/IC3232', 'IC3232', 'BE.NMBS.IC3232'
-    - 'IC3232' -> 'http://irail.be/vehicle/IC3232', 'IC3232', 'BE.NMBS.IC3232'
-    Retourne une liste ordonnée de candidats à essayer.
+    Normalise un identifiant véhicule iRail en variantes pour /vehicle.
+    - URI complète -> garder + extraire code si possible
+    - 'BE.NMBS.IC3232' -> URI + code + original
+    - 'IC3232' -> URI + code + BE.NMBS.code
     """
     candidates: List[str] = []
     if not raw:
@@ -117,7 +115,6 @@ def normalize_vehicle_id(raw: str) -> List[str]:
 
     r = raw.strip()
 
-    # Déjà URI complète
     if r.startswith("http://") or r.startswith("https://"):
         candidates.append(r)
         m = re.search(r"/vehicle/([A-Za-z]+[0-9]+)$", r)
@@ -127,7 +124,6 @@ def normalize_vehicle_id(raw: str) -> List[str]:
             candidates.append(f"BE.NMBS.{code}")
         return candidates
 
-    # BE.NMBS.IC3232
     m = re.match(r"^BE\.NMBS\.([A-Za-z]+[0-9]+)$", r)
     if m:
         code = m.group(1)
@@ -136,7 +132,6 @@ def normalize_vehicle_id(raw: str) -> List[str]:
         candidates.append(r)
         return candidates
 
-    # Code simple (IC3232)
     if re.match(r"^[A-Za-z]+[0-9]+$", r):
         candidates.append(f"http://irail.be/vehicle/{r}")
         candidates.append(r)
@@ -155,11 +150,11 @@ def list_connections(_from: str, _to: str) -> List[Dict[str, Any]]:
         "format": "json",
         "lang": IRAIL_LANG,
         "time": now_local.strftime("%H%M"),
-        "date": now_local.strftime("%d%m%y"),
+        "date": now_local.strftime("%d%m%y"),  # ddmmyy pour connections
         "typeOfTransport": "train",
         "results": 6,
     }
-    data = get_json("/connections/", params)  # redirigé vers /v1/connections/
+    data = get_json("/connections/", params)  # redirige vers /v1/connections/
     if not isinstance(data, dict):
         if log.isEnabledFor(logging.DEBUG):
             log.debug("connections: data is not dict: %r", data)
@@ -174,8 +169,11 @@ def list_connections(_from: str, _to: str) -> List[Dict[str, Any]]:
     return conns
 
 def vehicle_stops(vehicle_id_raw: str, service_date: date) -> List[Dict[str, Any]]:
-    """Appelle /vehicle et normalise la liste des arrêts. Essaie plusieurs variantes d'ID."""
-    date_str = service_date.strftime("%Y%m%d")
+    """
+    Appelle /vehicle et normalise la liste des arrêts.
+    ⚠️ /vehicle attend date=ddmmyy (doc iRail).
+    """
+    date_str = service_date.strftime("%d%m%y")  # <-- correction critique
     tried: List[str] = []
     for vid in normalize_vehicle_id(vehicle_id_raw):
         params = {"id": vid, "date": date_str, "format": "json", "lang": IRAIL_LANG}
@@ -270,11 +268,9 @@ def upsert_journey(session: Session, j: Journey, stops: List[JourneyStop]) -> in
     return jid
 
 # =========================================================
-# Parsing connexion → (vehicle_id, vehicle_name)
-#  v1 place le véhicule sous departure/arrival
+# Extraction véhicule depuis une connexion
 # =========================================================
 def parse_vehicle_fields(c: Dict[str, Any]) -> tuple[Optional[str], Optional[str]]:
-    # Ancien schéma (compat)
     v = c.get("vehicle")
     if isinstance(v, dict):
         vehicle_id = v.get("@id") or v.get("id") or v.get("name")
@@ -291,7 +287,6 @@ def parse_vehicle_fields(c: Dict[str, Any]) -> tuple[Optional[str], Optional[str
         if vehicle_id:
             return vehicle_id, vehicle_name
 
-    # Nouveau schéma (v1) : départ
     dep = c.get("departure") if isinstance(c.get("departure"), dict) else {}
     if dep:
         dvinfo = dep.get("vehicleinfo") if isinstance(dep.get("vehicleinfo"), dict) else {}
@@ -309,7 +304,6 @@ def parse_vehicle_fields(c: Dict[str, Any]) -> tuple[Optional[str], Optional[str
         elif isinstance(dv, str):
             return dv, dv
 
-    # Fallback : arrivée
     arr = c.get("arrival") if isinstance(c.get("arrival"), dict) else {}
     if arr:
         avinfo = arr.get("vehicleinfo") if isinstance(arr.get("vehicleinfo"), dict) else {}
@@ -389,7 +383,6 @@ def run_once() -> None:
                 from_uri = station_uri_of(dep)
                 to_uri   = station_uri_of(arr)
 
-                # Récup arrêts avec normalisation d'ID + fallbacks
                 stops_dicts = vehicle_stops(vehicle_id_raw, service_d)
                 stops: List[JourneyStop] = []
                 for sd in stops_dicts:
@@ -410,7 +403,7 @@ def run_once() -> None:
                     ))
 
                 j = Journey(
-                    vehicle_uri        = normalize_vehicle_id(vehicle_id_raw)[0],  # forme préférée (URI si possible)
+                    vehicle_uri        = normalize_vehicle_id(vehicle_id_raw)[0],
                     vehicle_name       = str(vehicle_name)[:64] if vehicle_name else normalize_vehicle_id(vehicle_id_raw)[0],
                     service_date       = service_d,
                     from_station_uri   = from_uri or "",

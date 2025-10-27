@@ -1,265 +1,298 @@
-import os, time, requests
-from datetime import datetime, timezone, date
-from dateutil import tz
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy import create_engine
-from sqlalchemy.exc import SQLAlchemyError
-from typing import Tuple
+# --- worker/worker.py ---
+import os
+import time
+import json
+import logging
+import argparse
+from datetime import datetime, date, timezone
+from typing import Any, Dict, List, Tuple, Optional
 
-DB_DSN = os.getenv("DB_DSN", "mysql+pymysql://app:change_me@db:3306/sncbslac")
-FROM = os.getenv("FROM_STATION", "Tournai")
-TO = os.getenv("TO_STATION", "Bruxelles-Central")
-LANG = os.getenv("IRAIL_LANG", "fr")
+import requests
+from requests.adapters import HTTPAdapter, Retry
+from dateutil import tz
+
+from database import SessionLocal
+from models import Journey, JourneyStop
+from crud import upsert_journey
+
+# -------------------------
+# Config & logging
+# -------------------------
+FROM_STATION = os.getenv("FROM_STATION", "Tournai")
+TO_STATION = os.getenv("TO_STATION", "Bruxelles-Central")
+IRAIL_LANG = os.getenv("IRAIL_LANG", "fr")
 POLL_SECONDS = int(os.getenv("POLL_SECONDS", "120"))
 USER_AGENT = os.getenv("USER_AGENT", "SNCB-Slac/1.0 (+https://sncb.terminalcommun.be)")
+TZ = os.getenv("TZ", "Europe/Brussels")
 
-engine = create_engine(DB_DSN, pool_pre_ping=True, future=True)
-SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s worker: %(message)s",
+)
+log = logging.getLogger("worker")
 
-from_backend = False
-try:
-    # Reuse models from backend by path if mounted together; here we re-declare minimal structures.
-    pass
-except Exception:
-    pass
+# -------------------------
+# HTTP session with retries
+# -------------------------
+def make_session() -> requests.Session:
+    s = requests.Session()
+    retries = Retry(
+        total=4,
+        backoff_factor=1.0,
+        status_forcelist=[500, 502, 503, 504, 522, 524],
+        allowed_methods=["GET"],
+        raise_on_status=False,
+    )
+    adapter = HTTPAdapter(max_retries=retries)
+    s.mount("https://", adapter)
+    s.mount("http://", adapter)
+    s.headers.update({"User-Agent": USER_AGENT, "Accept": "application/json"})
+    return s
 
-# Minimal models (string-based) to avoid circular import between images
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
-from sqlalchemy import String, Integer, BigInteger, Enum, DateTime, Date, ForeignKey, Boolean
-from sqlalchemy.orm import relationship
+# -------------------------
+# iRail helpers
+# -------------------------
+IRAIl_BASE = "https://api.irail.be"
 
-class Base(DeclarativeBase): pass
-
-class Journey(Base):
-    __tablename__ = "journeys"
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    vehicle_uri: Mapped[str] = mapped_column(String(255), nullable=False)
-    vehicle_name: Mapped[str] = mapped_column(String(64), nullable=False)
-    service_date: Mapped["Date"] = mapped_column(Date, nullable=False)
-    from_station_uri: Mapped[str] = mapped_column(String(255), nullable=False)
-    to_station_uri: Mapped[str] = mapped_column(String(255), nullable=False)
-    planned_departure: Mapped["DateTime"] = mapped_column(DateTime, nullable=False)
-    planned_arrival: Mapped["DateTime"] = mapped_column(DateTime, nullable=False)
-    realtime_departure: Mapped["DateTime | None"] = mapped_column(DateTime, nullable=True)
-    realtime_arrival: Mapped["DateTime | None"] = mapped_column(DateTime, nullable=True)
-    status: Mapped[str] = mapped_column(Enum("running","completed", name="journey_status"), nullable=False)
-    direction: Mapped[str | None] = mapped_column(String(128), nullable=True)
-
-class JourneyStop(Base):
-    __tablename__ = "journey_stops"
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    journey_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("journeys.id", ondelete="CASCADE"))
-    stop_order: Mapped[int] = mapped_column(Integer, nullable=False)
-    station_uri: Mapped[str] = mapped_column(String(255), nullable=False)
-    station_name: Mapped[str] = mapped_column(String(128), nullable=False)
-    planned_arrival: Mapped["DateTime | None"] = mapped_column(DateTime, nullable=True)
-    planned_departure: Mapped["DateTime | None"] = mapped_column(DateTime, nullable=True)
-    realtime_arrival: Mapped["DateTime | None"] = mapped_column(DateTime, nullable=True)
-    realtime_departure: Mapped["DateTime | None"] = mapped_column(DateTime, nullable=True)
-    platform: Mapped[str | None] = mapped_column(String(16), nullable=True)
-    arrived: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    left: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    is_extra_stop: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    arrival_canceled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    departure_canceled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-
-Base.metadata.create_all(bind=engine)
-
-def irail(path, params):
-    headers = {
-        "Accept": "application/json",
-        "User-Agent": USER_AGENT,
-    }
-    url = f"https://api.irail.be/{path}"
-    r = requests.get(url, params=params, headers=headers, timeout=15)
-    r.raise_for_status()
-    return r.json()
-
-def to_dt(ts):
-    # iRail often returns epoch seconds or ISO; normalize if needed. Here assume epoch seconds or ISO-like.
+def fetch_connections(session: requests.Session, frm: str, to: str, lang: str) -> List[Dict[str, Any]]:
+    """GET /connections?from=...&to=...&format=json&lang=fr"""
+    params = {"from": frm, "to": to, "format": "json", "lang": lang}
     try:
-        # epoch
-        return datetime.fromtimestamp(int(ts), tz=tz.gettz("Europe/Brussels")).replace(tzinfo=None)
+        r = session.get(f"{IRAIl_BASE}/connections/", params=params, timeout=20)
+        r.raise_for_status()
+        data = r.json()
+        conns = data.get("connection") or data.get("connections") or []
+        if isinstance(conns, dict):
+            conns = [conns]
+        if not isinstance(conns, list):
+            log.warning("Unexpected connections payload type: %s", type(conns))
+            return []
+        return conns
+    except requests.exceptions.Timeout:
+        log.warning("connections timeout %s -> %s", frm, to)
+        return []
+    except Exception as e:
+        log.warning("connections error %s %s: %s", frm, to, e)
+        return []
+
+def safe_get(d: Any, *keys, default=None):
+    cur = d
+    for k in keys:
+        if isinstance(cur, dict) and k in cur:
+            cur = cur[k]
+        else:
+            return default
+    return cur
+
+def normalize_vehicle_id(vehicle_field: Any) -> Optional[str]:
+    """
+    iRail peut renvoyer:
+      - "BE.NMBS.IC3230" (str)
+      - {"name": "IC3230", "id": "BE.NMBS.IC3230", ...} (dict)
+    """
+    if isinstance(vehicle_field, str):
+        return vehicle_field
+    if isinstance(vehicle_field, dict):
+        vid = vehicle_field.get("id") or vehicle_field.get("@id") or vehicle_field.get("name")
+        if isinstance(vid, str):
+            # si "IC3230", préfixons BE.NMBS. si absent
+            if not vid.startswith("BE."):
+                return f"BE.NMBS.{vid}"
+            return vid
+    return None
+
+def fetch_vehicle_stops(session: requests.Session, vehicle_id: str, lang: str) -> Tuple[str, List[Dict[str, Any]]]:
+    """
+    GET /vehicle/?id=BE.NMBS.IC3230&format=json&lang=fr
+    Retourne (vehicle_name, stops[])
+    """
+    params = {"id": vehicle_id, "format": "json", "lang": lang}
+    try:
+        r = session.get(f"{IRAIl_BASE}/vehicle/", params=params, timeout=20)
+        r.raise_for_status()
+        data = r.json()
+        vehicle_name = data.get("vehicle") or data.get("name") or vehicle_id
+        stops = data.get("stops", {}).get("stop", [])
+        if isinstance(stops, dict):
+            stops = [stops]
+        if not isinstance(stops, list):
+            stops = []
+        return str(vehicle_name), stops
+    except requests.exceptions.Timeout:
+        log.warning("vehicle timeout %s", vehicle_id)
+        return vehicle_id, []
+    except Exception as e:
+        log.warning("vehicle error %s: %s", vehicle_id, e)
+        return vehicle_id, []
+
+def to_dt(ts: Any) -> Optional[datetime]:
+    """
+    Convertit timestamps (epoch secondes / str) en datetime aware Europe/Brussels.
+    iRail donne souvent des epoch en str.
+    """
+    if ts in (None, "", 0, "0"):
+        return None
+    try:
+        # epoch sec string
+        v = int(str(ts))
+        dt = datetime.fromtimestamp(v, tz=timezone.utc).astimezone(tz.gettz(TZ))
+        return dt
     except Exception:
         try:
-            return datetime.fromisoformat(ts.replace("Z","+00:00")).astimezone(tz.gettz("Europe/Brussels")).replace(tzinfo=None)
+            # ISO
+            return datetime.fromisoformat(str(ts)).astimezone(tz.gettz(TZ))
         except Exception:
             return None
 
-def parse_vehicle(vehicle_id: str):
-    data = irail("vehicle/", {"id": vehicle_id, "format": "json", "lang": LANG})
-    stops = []
+def build_journey_and_stops(conn: Dict[str, Any], session: requests.Session) -> Optional[Tuple[Journey, List[JourneyStop]]]:
+    """
+    À partir d'une connection iRail, construire le Journey + Stops via endpoint vehicle.
+    """
+    # departure/arrival blocs
+    dep = conn.get("departure", {})
+    arr = conn.get("arrival", {})
+
+    # véhicule
+    vehicle_field = dep.get("vehicle") or conn.get("vehicle")
+    vid = normalize_vehicle_id(vehicle_field)
+    if not vid:
+        log.warning("skip connection without vehicle id: %s", json.dumps(conn)[:200])
+        return None
+
+    # stops détaillés
+    vehicle_name, stops_raw = fetch_vehicle_stops(session, vid, IRAIL_LANG)
+
+    # from/to URIs / names
+    from_station_uri = dep.get("stationinfo", {}).get("@id") or dep.get("stationinfo", {}).get("id") or ""
+    to_station_uri = arr.get("stationinfo", {}).get("@id") or arr.get("stationinfo", {}).get("id") or ""
+
+    # direction (si dispo)
+    direction = safe_get(conn, "direction", "name", default=None)
+
+    # horaires planifiés
+    planned_dep = to_dt(dep.get("time")) or to_dt(dep.get("scheduledTime"))
+    planned_arr = to_dt(arr.get("time")) or to_dt(arr.get("scheduledTime"))
+
+    # horaires réels
+    rt_dep = to_dt(dep.get("timeR")) or to_dt(dep.get("realtime"))
+    rt_arr = to_dt(arr.get("timeR")) or to_dt(arr.get("realtime"))
+
+    # Statut par défaut : running ; si dernier stop a "arrived=true" => completed
+    status = "running"
+
+    # Construire les stops
+    stops: List[JourneyStop] = []
+    order = 1
     last_arrived = False
-    planned_departure = None
-    planned_arrival = None
-    realtime_departure = None
-    realtime_arrival = None
-    vehicle_name = data.get("vehicle", {}).get("name") or vehicle_id
-    direction = data.get("vehicle", {}).get("direction", {}).get("name")
 
-    for idx, st in enumerate(data.get("stops", {}).get("stop", []), start=1):
-        station_uri = st.get("stationinfo", {}).get("uri") or st.get("station")
-        station_name = st.get("stationinfo", {}).get("name") or st.get("station")
-        arr = st.get("arrival", {})
-        dep = st.get("departure", {})
-        pa = to_dt(arr.get("time")) if arr else None
-        pd = to_dt(dep.get("time")) if dep else None
-        ra = to_dt(arr.get("realtime")) if arr else None
-        rd = to_dt(dep.get("realtime")) if dep else None
-        if idx == 1:
-            planned_departure = pd or pa
-            realtime_departure = rd or ra
-        planned_arrival = pa or planned_arrival
-        realtime_arrival = ra or realtime_arrival
-        platform = dep.get("platform") or arr.get("platform")
-        arrived = bool(int(arr.get("arrived", "0"))) if arr else False
-        left = bool(int(dep.get("left", "0"))) if dep else False
-        is_extra_stop = bool(int(st.get("isExtraStop", "0")))
-        arrival_canceled = bool(int(arr.get("canceled", "0"))) if arr else False
-        departure_canceled = bool(int(dep.get("canceled", "0"))) if dep else False
+    for s in stops_raw:
+        # s peut être dict; certaines clés: station, stationinfo, time, scheduledArrivalTime/DepartureTime, delay, platform, canceled, ...
+        station_name = s.get("station") or safe_get(s, "stationinfo", "name") or "?"
+        station_uri = safe_get(s, "stationinfo", "@id", default=None) or safe_get(s, "stationinfo", "id", default="")
 
-        stops.append({
-            "stop_order": idx,
-            "station_uri": station_uri,
-            "station_name": station_name,
-            "planned_arrival": pa,
-            "planned_departure": pd,
-            "realtime_arrival": ra,
-            "realtime_departure": rd,
-            "platform": platform,
-            "arrived": arrived,
-            "left": left,
-            "is_extra_stop": is_extra_stop,
-            "arrival_canceled": arrival_canceled,
-            "departure_canceled": departure_canceled
-        })
+        planned_arrival = to_dt(s.get("arrivalTime")) or to_dt(s.get("time"))  # fallback
+        planned_departure = to_dt(s.get("departureTime")) or None
+
+        realtime_arrival = to_dt(s.get("arrivalTimeR")) or None
+        realtime_departure = to_dt(s.get("departureTimeR")) or None
+
+        platform = (s.get("platform") or {}).get("name") if isinstance(s.get("platform"), dict) else s.get("platform")
+
+        arrived = bool(s.get("arrived")) if "arrived" in s else False
+        left = bool(s.get("left")) if "left" in s else False
+        is_extra = bool(s.get("isExtraStop")) if "isExtraStop" in s else False
+        arr_canceled = bool(s.get("arrivalCanceled")) if "arrivalCanceled" in s else False
+        dep_canceled = bool(s.get("departureCanceled")) if "departureCanceled" in s else False
+
+        last_arrived = arrived  # mis à jour à chaque itération
+        stops.append(JourneyStop(
+            journey_id=0,  # renseigné par upsert
+            stop_order=order,
+            station_uri=station_uri,
+            station_name=station_name,
+            planned_arrival=planned_arrival,
+            planned_departure=planned_departure,
+            realtime_arrival=realtime_arrival,
+            realtime_departure=realtime_departure,
+            platform=platform if isinstance(platform, str) else None,
+            arrived=arrived,
+            left=left,
+            is_extra_stop=is_extra,
+            arrival_canceled=arr_canceled,
+            departure_canceled=dep_canceled,
+        ))
+        order += 1
 
     if stops:
-        last = stops[-1]
-        last_arrived = last["arrived"]
+        status = "completed" if last_arrived else "running"
 
-    from_uri = stops[0]["station_uri"] if stops else None
-    to_uri = stops[-1]["station_uri"] if stops else None
+    # Dates de service (date locale)
+    service_dt = planned_dep or datetime.now(tz=tz.gettz(TZ))
+    service_date = service_dt.date()
 
-    return {
-        "vehicle_uri": f"http://irail.be/vehicle/{vehicle_id}" if not vehicle_id.startswith("http") else vehicle_id,
-        "vehicle_name": vehicle_name,
-        "from_station_uri": from_uri or "",
-        "to_station_uri": to_uri or "",
-        "planned_departure": planned_departure or datetime.now(),
-        "planned_arrival": planned_arrival or datetime.now(),
-        "realtime_departure": realtime_departure,
-        "realtime_arrival": realtime_arrival,
-        "status": "completed" if last_arrived else "running",
-        "direction": direction,
-        "stops": stops
-    }
+    j = Journey(
+        vehicle_uri=f"http://irail.be/vehicle/{vehicle_name}" if vehicle_name else vid,
+        vehicle_name=str(vehicle_name or vid),
+        service_date=service_date,
+        from_station_uri=from_station_uri or "",
+        to_station_uri=to_station_uri or "",
+        planned_departure=planned_dep or service_dt,
+        planned_arrival=planned_arr or (planned_dep or service_dt),
+        realtime_departure=rt_dep,
+        realtime_arrival=rt_arr,
+        status=status,
+        direction=direction,
+    )
 
-def collect_once():
-    # Query both directions around now
-    conns = []
-    for a, b in [(FROM, TO), (TO, FROM)]:
-        try:
-            data = irail("connections/", {"from": a, "to": b, "format": "json", "lang": LANG})
-            conns.extend(data.get("connection", data.get("connections", {}).get("connection", [])))
-        except Exception as e:
-            print("connections error", a, b, e)
+    return j, stops
 
-    # Extract vehicles
-    vehicles = set()
-    for c in conns:
-        vehicle_id = None
-        # Different payloads exist; attempt common fields
-        if "vehicle" in c:
-            vehicle_id = c["vehicle"].split("/")[-1] if "/" in c["vehicle"] else c["vehicle"]
-        elif "vias" in c:
-            try:
-                vehicle_id = c["vias"]["via"][0]["vehicle"]
-            except Exception:
-                pass
-        if vehicle_id:
-            vehicles.add(vehicle_id)
-
-    if not vehicles:
-        print("No vehicles found in connections.")
-        return
+# -------------------------
+# Main loop
+# -------------------------
+def process_once(session: requests.Session) -> int:
+    """Retourne le nombre de trajets upsertés."""
+    total = 0
+    # Aller
+    conns_fwd = fetch_connections(session, FROM_STATION, TO_STATION, IRAIL_LANG)
+    # Retour
+    conns_bwd = fetch_connections(session, TO_STATION, FROM_STATION, IRAIL_LANG)
 
     with SessionLocal() as s:
-        for vid in vehicles:
+        for conn in (conns_fwd + conns_bwd):
             try:
-                parsed = parse_vehicle(vid)
+                built = build_journey_and_stops(conn, session)
+                if not built:
+                    continue
+                j, stops = built
+                upsert_journey(s, j, stops)
+                s.commit()
+                total += 1
             except Exception as e:
-                print("vehicle parse error", vid, e)
-                time.sleep(0.4)
-                continue
+                log.warning("upsert error: %s", e)
 
-            # Upsert
-            from sqlalchemy import select, delete
-            # Determine service_date from planned_departure (Europe/Brussels)
-            service_date = parsed["planned_departure"].date()
-
-            exists = s.execute(
-                select(Journey).where(Journey.vehicle_uri == parsed["vehicle_uri"], Journey.service_date == service_date)
-            ).scalars().first()
-
-            if not exists:
-                j = Journey(
-                    vehicle_uri=parsed["vehicle_uri"],
-                    vehicle_name=parsed["vehicle_name"],
-                    service_date=service_date,
-                    from_station_uri=parsed["from_station_uri"],
-                    to_station_uri=parsed["to_station_uri"],
-                    planned_departure=parsed["planned_departure"],
-                    planned_arrival=parsed["planned_arrival"],
-                    realtime_departure=parsed["realtime_departure"],
-                    realtime_arrival=parsed["realtime_arrival"],
-                    status=parsed["status"],
-                    direction=parsed["direction"],
-                )
-                s.add(j); s.flush()
-                jid = j.id
-            else:
-                exists.vehicle_name = parsed["vehicle_name"]
-                exists.from_station_uri = parsed["from_station_uri"]
-                exists.to_station_uri = parsed["to_station_uri"]
-                exists.planned_departure = parsed["planned_departure"]
-                exists.planned_arrival = parsed["planned_arrival"]
-                exists.realtime_departure = parsed["realtime_departure"]
-                exists.realtime_arrival = parsed["realtime_arrival"]
-                exists.status = parsed["status"]
-                exists.direction = parsed["direction"]
-                jid = exists.id
-                s.execute(delete(JourneyStop).where(JourneyStop.journey_id == jid))
-
-            order = 1
-            for st in parsed["stops"]:
-                s.add(JourneyStop(
-                    journey_id=jid,
-                    stop_order=order,
-                    station_uri=st["station_uri"],
-                    station_name=st["station_name"],
-                    planned_arrival=st["planned_arrival"],
-                    planned_departure=st["planned_departure"],
-                    realtime_arrival=st["realtime_arrival"],
-                    realtime_departure=st["realtime_departure"],
-                    platform=st["platform"],
-                    arrived=st["arrived"],
-                    left=st["left"],
-                    is_extra_stop=st["is_extra_stop"],
-                    arrival_canceled=st["arrival_canceled"],
-                    departure_canceled=st["departure_canceled"],
-                ))
-                order += 1
-            s.commit()
-            time.sleep(0.4)  # keep under ~3 req/s
+    return total
 
 def main():
-    print("Worker started; polling every", POLL_SECONDS, "seconds")
+    parser = argparse.ArgumentParser(description="SNCB Slac worker (iRail poller)")
+    parser.add_argument("--once", action="store_true", help="Exécuter un seul cycle puis quitter")
+    parser.add_argument("--debug", action="store_true", help="Log niveau DEBUG")
+    args = parser.parse_args()
+    if args.debug:
+        log.setLevel(logging.DEBUG)
+
+    session = make_session()
+    if args.once:
+        n = process_once(session)
+        log.info("cycle inserted/updated: %d", n)
+        return
+
+    # Boucle infinie
     while True:
         try:
-            collect_once()
+            n = process_once(session)
+            log.info("cycle inserted/updated: %d", n)
         except Exception as e:
-            print("collect_once error", e)
+            log.error("fatal cycle error: %s", e)
         time.sleep(POLL_SECONDS)
 
 if __name__ == "__main__":

@@ -6,22 +6,23 @@ services:
     image: mariadb:11
     container_name: sncb-db
     environment:
-      MARIADB_ROOT_PASSWORD: root
       MARIADB_DATABASE: sncbslac
       MARIADB_USER: app
       MARIADB_PASSWORD: change_me
+      MARIADB_ROOT_PASSWORD: root_pwd_change_me   # IMPORTANT
       TZ: Europe/Brussels
     volumes:
       - dbdata:/var/lib/mysql
-    networks:
-      - internal
+      - ./db-init:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      # Utilise le client mariadb (présent dans l'image) pour éviter mysqladmin
-      test: ["CMD-SHELL", "echo 'SELECT 1' | mariadb -h127.0.0.1 -u\"$MARIADB_USER\" -p\"$MARIADB_PASSWORD\" \"$MARIADB_DATABASE\" >/dev/null 2>&1"]
+      # évite mysqladmin (absent). Utilise le client mariadb:
+      test: ["CMD", "mariadb", "-h127.0.0.1", "-uapp", "-pchange_me", "sncbslac", "-e", "SELECT 1"]
       interval: 10s
       timeout: 5s
-      retries: 5
-      start_period: 20s
+      retries: 30
+volumes:
+  dbdata:
+
 
   backend:
     build:

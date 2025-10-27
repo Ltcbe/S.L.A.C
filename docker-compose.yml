@@ -77,15 +77,13 @@ services:
       NODE_ENV: production
       PORT: "3000"
       HOST: 0.0.0.0
-      # IMPORTANT: en local via compose, on expose /api et Traefik (ou le LB) fera le reste
       NEXT_PUBLIC_API_BASE_URL: /api
       TZ: Europe/Brussels
     depends_on:
       backend:
         condition: service_healthy
     ports:
-      - "13000:3000"
-    # Healthcheck sans curl/wget, avec start_period pour laisser Next démarrer
+      - "13080:3000"   # <-- change ici; mets 13000 si tu préfères
     healthcheck:
       test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:3000/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
       interval: 10s

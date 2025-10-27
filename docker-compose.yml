@@ -8,11 +8,12 @@ services:
       MARIADB_USER: app
       MARIADB_PASSWORD: change_me
       MARIADB_ROOT_PASSWORD: change_root
+      TZ: Europe/Brussels
     volumes:
       - dbdata:/var/lib/mysql
     healthcheck:
-      # On ping en root, avec le MDP défini ci-dessus.
-      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$$MARIADB_ROOT_PASSWORD | grep 'mysqld is alive' || exit 1"]
+      # ✅ Ping sans mot de passe, purement connectivité/availability
+      test: ["CMD-SHELL", "mariadb-admin ping -h127.0.0.1 --silent"]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -30,9 +31,7 @@ services:
       db:
         condition: service_healthy
     environment:
-      # DB / SQLAlchemy
       DB_DSN: mysql+pymysql://app:change_me@db:3306/sncbslac
-      # FastAPI
       HOST: 0.0.0.0
       PORT: 8000
       TZ: Europe/Brussels
@@ -61,14 +60,11 @@ services:
       NODE_ENV: production
       PORT: 3000
       HOST: 0.0.0.0
-      # Le front parle au back via le proxy Next (/api).
-      # Et Dokploy reverse-proxy le domaine public vers le front.
       NEXT_PUBLIC_API_BASE_URL: /api
       TZ: Europe/Brussels
     ports:
       - "13080:3000"
     healthcheck:
-      # Pas besoin de curl: on utilise Node pour tester /health (200 => OK)
       test: ["CMD-SHELL", "node -e \"require('http').get('http://127.0.0.1:3000/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))\""]
       interval: 10s
       timeout: 5s

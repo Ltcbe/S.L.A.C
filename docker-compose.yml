@@ -1,4 +1,3 @@
-# docker-compose.yml (COMPLET)
 name: sncb-slac
 
 networks:
@@ -76,6 +75,8 @@ services:
       - sncb_net
 
   frontend:
+    # IMPORTANT : on laisse le contexte à la racine "."
+    # Le Dockerfile ci-dessous copie explicitement depuis frontend/
     build:
       context: .
       dockerfile: frontend/Dockerfile
@@ -86,7 +87,6 @@ services:
       PORT: 3000
       HOST: 0.0.0.0
       NEXT_PUBLIC_API_BASE_URL: https://sncb.terminalcommun.be/api
-      # Utilisable côté serveur/route Next si tu en as besoin :
       BACKEND_INTERNAL_URL: http://backend:8000
     depends_on:
       backend:

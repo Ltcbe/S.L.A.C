@@ -1,24 +1,22 @@
-version: "3.9"
-
 services:
   db:
     image: mariadb:11
     container_name: sncb-db
+    restart: unless-stopped
     environment:
-      - MARIADB_DATABASE=sncbslac
-      - MARIADB_USER=app
-      - MARIADB_PASSWORD=change_me
-      - MARIADB_ROOT_PASSWORD=change_me_root
-      - TZ=Europe/Brussels
-    healthcheck:
-      test: ["CMD-SHELL", "mariadb-admin ping -h 127.0.0.1 -u$$MARIADB_USER -p$$MARIADB_PASSWORD --silent"]
-      interval: 10s
-      timeout: 5s
-      retries: 12
+      MARIADB_DATABASE: sncbslac
+      MARIADB_USER: app
+      MARIADB_PASSWORD: change_me
+      MARIADB_ROOT_PASSWORD: change_me_root
     volumes:
       - dbdata:/var/lib/mysql
     networks:
       - internal
+    healthcheck:
+      test: ["CMD-SHELL", "mariadb -u${MARIADB_USER} -p${MARIADB_PASSWORD} -e 'SELECT 1' ${MARIADB_DATABASE} >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
 
   backend:
     build:
@@ -26,19 +24,42 @@ services:
       dockerfile: backend/Dockerfile
     image: sncb-backend:local
     container_name: sncb-backend
+    restart: unless-stopped
     depends_on:
       db:
         condition: service_healthy
     environment:
-      - TZ=Europe/Brussels
-      - DB_DSN=mysql+pymysql://app:change_me@db:3306/sncbslac
-      - LOG_LEVEL=INFO
-      - DEBUG=false
+      # DB
+      DB_DSN: mysql+pymysql://app:change_me@db:3306/sncbslac
+      MARIADB_HOST: db
+      MARIADB_PORT: 3306
+      MARIADB_DATABASE: sncbslac
+      MARIADB_USER: app
+      MARIADB_PASSWORD: change_me
+      # Logs
+      LOG_LEVEL: INFO
+      DEBUG: "false"
+      TZ: Europe/Brussels
+      # Serveur
+      HOST: 0.0.0.0
+      PORT: "8000"
     ports:
-      - "8000:8000"
+      - "18000:8000"     # debug local
     networks:
       - internal
-    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8000/healthz || curl -fsS http://127.0.0.1:8000/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.sncb-backend.rule=Host(`sncb.terminalcommun.be`) && PathPrefix(`/api`)"
+      - "traefik.http.routers.sncb-backend.entrypoints=websecure"
+      - "traefik.http.routers.sncb-backend.tls=true"
+      - "traefik.http.services.sncb-backend.loadbalancer.server.port=8000"
+      - "traefik.http.middlewares.sncb-backend-strip.stripprefix.prefixes=/api"
+      - "traefik.http.routers.sncb-backend.middlewares=sncb-backend-strip"
 
   frontend:
     build:
@@ -46,17 +67,32 @@ services:
       dockerfile: frontend/Dockerfile
     image: sncb-frontend:local
     container_name: sncb-frontend
+    restart: unless-stopped
     environment:
-      - TZ=Europe/Brussels
-      - NODE_ENV=production
-      - PORT=3000
-      - HOST=0.0.0.0
-      - NEXT_PUBLIC_API_BASE_URL=/api
+      NODE_ENV: production
+      PORT: "3000"
+      HOST: 0.0.0.0
+      # En prod via Traefik, garde /api (relatif), c’est plus simple local + prod
+      NEXT_PUBLIC_API_BASE_URL: /api
+      TZ: Europe/Brussels
+    depends_on:
+      backend:
+        condition: service_healthy
     ports:
-      - "13000:3000"   # <— changement ici (évite le conflit avec 3000)
+      - "13000:3000"     # debug local
     networks:
       - internal
-    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/health || curl -fsS http://127.0.0.1:3000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.sncb-frontend.rule=Host(`sncb.terminalcommun.be`)"
+      - "traefik.http.routers.sncb-frontend.entrypoints=websecure"
+      - "traefik.http.routers.sncb-frontend.tls=true"
+      - "traefik.http.services.sncb-frontend.loadbalancer.server.port=3000"
 
   worker:
     build:
@@ -64,25 +100,26 @@ services:
       dockerfile: worker/Dockerfile
     image: sncb-worker:local
     container_name: sncb-worker
+    restart: unless-stopped
     depends_on:
       db:
         condition: service_healthy
     environment:
-      - TZ=Europe/Brussels
-      - DB_DSN=mysql+pymysql://app:change_me@db:3306/sncbslac
-      - FROM_STATION=Tournai
-      - TO_STATION=Bruxelles-Central
-      - IRAIL_LANG=fr
-      - POLL_SECONDS=120
-      - USER_AGENT=SNCB-Slac/1.0 (+https://sncb.terminalcommun.be)
-      - DEBUG=false
-      - LOG_LEVEL=INFO
+      FROM_STATION: Tournai
+      TO_STATION: Bruxelles-Central
+      IRAIL_LANG: fr
+      POLL_SECONDS: "120"
+      USER_AGENT: "SNCB-Slac/1.0 (+https://sncb.terminalcommun.be)"
+      TZ: Europe/Brussels
+      DEBUG: "false"
+      LOG_LEVEL: INFO
+      # DB
+      DB_DSN: mysql+pymysql://app:change_me@db:3306/sncbslac
     networks:
       - internal
-    restart: unless-stopped
-
-volumes:
-  dbdata:
 
 networks:
   internal:
+
+volumes:
+  dbdata:

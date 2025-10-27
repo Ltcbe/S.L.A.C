@@ -2,15 +2,18 @@
 FROM python:3.11-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app
 
 WORKDIR /app
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Dépendances
+COPY worker/requirements.txt worker/requirements.txt
+RUN pip install --no-cache-dir -r worker/requirements.txt
 
-# IMPORTANT : on copie tout le dossier worker dans /app
-COPY . /app
+# Code shared + worker
+COPY shared /app/shared
+COPY worker /app/worker
 
-# Lance la boucle de collecte
+WORKDIR /app/worker
 CMD ["python", "-u", "main.py"]

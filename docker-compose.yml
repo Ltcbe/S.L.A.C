@@ -1,81 +1,83 @@
-# --- docker-compose.yml ---
+version: "3.9"
+
 services:
   db:
-    image: mariadb:11
-    restart: unless-stopped
+    image: mariadb:11.4
+    container_name: ${COMPOSE_PROJECT_NAME:-sncb}-db-1
     environment:
-      MARIADB_DATABASE: ${MARIADB_DATABASE}
-      MARIADB_USER: ${MARIADB_USER}
-      MARIADB_PASSWORD: ${MARIADB_PASSWORD}
-      MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD}
-      TZ: ${TZ}
+      MARIADB_DATABASE: sncbslac
+      MARIADB_USER: app
+      MARIADB_PASSWORD: change_me
+      MARIADB_ROOT_PASSWORD: change_me_root
+      TZ: Europe/Brussels
     volumes:
       - dbdata:/var/lib/mysql
     healthcheck:
-      test: ["CMD-SHELL", "mariadb -u${MARIADB_USER} -p${MARIADB_PASSWORD} -e 'SELECT 1' ${MARIADB_DATABASE}"]
-      interval: 15s
-      timeout: 5s
-      retries: 10
-    networks:
-      appnet:
-        aliases: [db]
+      test: ["CMD-SHELL", "mariadb-admin ping -u$${MARIADB_USER} -p$${MARIADB_PASSWORD} --silent"]
+      interval: 20s
+      timeout: 3s
+      retries: 5
 
   backend:
     build:
-      context: .
-      dockerfile: backend/Dockerfile
-    restart: unless-stopped
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: ${COMPOSE_PROJECT_NAME:-sncb}-backend-1
+    environment:
+      DB_DSN: mysql+pymysql://app:change_me@db:3306/sncbslac
+      BACKEND_HOST: 0.0.0.0
+      BACKEND_PORT: 8000
+      BACKEND_LOG_LEVEL: info
+      TZ: Europe/Brussels
     depends_on:
       db:
         condition: service_healthy
-    environment:
-      DB_DSN: ${DB_DSN}
-      TZ: ${TZ}
-      BACKEND_HOST: ${BACKEND_HOST}
-      BACKEND_PORT: ${BACKEND_PORT}
-      BACKEND_LOG_LEVEL: ${BACKEND_LOG_LEVEL}
-    expose: ["8000"]
-    networks:
-      appnet:
-        aliases: [backend]
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8000/healthz"]
+      interval: 20s
+      timeout: 3s
+      retries: 5
 
   worker:
     build:
-      context: .
-      dockerfile: worker/Dockerfile
-    restart: unless-stopped
+      context: ./worker
+      dockerfile: Dockerfile
+    container_name: ${COMPOSE_PROJECT_NAME:-sncb}-worker-1
+    environment:
+      DB_DSN: mysql+pymysql://app:change_me@db:3306/sncbslac
+      FROM_STATION: Tournai
+      TO_STATION: Bruxelles-Central
+      IRAIL_LANG: fr
+      POLL_SECONDS: 120
+      USER_AGENT: SNCB-Slac/1.0 (+https://sncb.terminalcommun.be)
+      TZ: Europe/Brussels
+      DEBUG: "false"
+      LOG_LEVEL: "INFO"
     depends_on:
       db:
         condition: service_healthy
-    environment:
-      DB_DSN: ${DB_DSN}
-      TZ: ${TZ}
-      FROM_STATION: ${FROM_STATION}
-      TO_STATION: ${TO_STATION}
-      IRAIL_LANG: ${IRAIL_LANG}
-      POLL_SECONDS: ${POLL_SECONDS}
-      USER_AGENT: ${USER_AGENT}
-    networks:
-      appnet:
-        aliases: [worker]
 
   frontend:
-    build: ./frontend
-    restart: unless-stopped
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: runner
+    container_name: ${COMPOSE_PROJECT_NAME:-sncb}-frontend-1
     environment:
-      BACKEND_URL: ${BACKEND_URL:-http://backend:8000}
-      TZ: ${TZ}
+      NODE_ENV: production
       PORT: 3000
+      HOST: 0.0.0.0
+      NEXT_PUBLIC_API_BASE_URL: https://sncb.terminalcommun.be/api
+      TZ: Europe/Brussels
     depends_on:
-      - backend
-    expose: ["3000"]
-    networks:
-      appnet:
-        aliases: [frontend]
+      backend:
+        condition: service_started
+    # Pas de ports: Dokploy route vers 3000
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3000/health"]
+      interval: 20s
+      timeout: 3s
+      retries: 5
 
 volumes:
   dbdata:
-
-networks:
-  appnet:
-    driver: bridge

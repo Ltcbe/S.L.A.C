@@ -1,31 +1,47 @@
-# --- frontend/Dockerfile ---
-# Next.js 14 en mode standalone, port interne 3000 (aligné avec Dokploy)
+# ====== Étape deps ======
 FROM node:20-bullseye-slim AS deps
 WORKDIR /app
+# Copie des manifestes pour un cache npm stable
 COPY package.json package-lock.json* ./
-# Utilise npm ci si lockfile présent ; sinon fallback npm install
-RUN if [ -f package-lock.json ]; then npm ci; else npm install --no-audit --fund=false --progress=false; fi
+# Install propre en prod (sans dev) — ajuste si nécessaire
+RUN npm ci
 
+# ====== Étape build ======
 FROM node:20-bullseye-slim AS builder
 WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1
-# ENV NODE_OPTIONS="--max-old-space-size=512"  # décommente si le runner a peu de RAM
+# Copie node_modules et sources
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
-# Build en mode standalone (cf. next.config.js avec output: 'standalone')
+# Build Next en mode standalone
 RUN npm run build
 
+# ====== Étape run ======
 FROM node:20-bullseye-slim AS runner
 WORKDIR /app
+
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
-# Port interne d’écoute
+# Port et host forcés (évite ECONNREFUSED en 127.0.0.1)
 ENV PORT=3000
-# Copie du bundle standalone + assets
+ENV HOST=0.0.0.0
+
+# Outils utiles (curl) + nettoyage
+RUN apt-get update -y \
+ && apt-get install -y --no-install-recommends curl \
+ && rm -rf /var/lib/apt/lists/*
+
+# On copie le bundle standalone généré par Next
+# .next/standalone contient server.js et node_modules nécessaires
 COPY --from=builder /app/.next/standalone ./
+# assets statiques
 COPY --from=builder /app/.next/static ./.next/static
 COPY --from=builder /app/public ./public
-# Expose le port interne (pas de binding hôte ici)
+
+# Healthcheck interne du conteneur
+HEALTHCHECK --interval=20s --timeout=3s --start-period=10s --retries=3 \
+  CMD curl -fsS http://127.0.0.1:${PORT}/health || exit 1
+
 EXPOSE 3000
-# Lance le serveur Next standalone
+# Lancement du serveur Next standalone
 CMD ["node", "server.js"]

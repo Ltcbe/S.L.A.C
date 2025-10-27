@@ -11,13 +11,12 @@ services:
     volumes:
       - dbdata:/var/lib/mysql
     healthcheck:
-      test: ["CMD-SHELL", "mariadb -h127.0.0.1 -uapp -pchange_me -e 'SELECT 1' sncbslac"]
+      test: ["CMD-SHELL", "mariadb -h127.0.0.1 -u$MARIADB_USER -p$MARIADB_PASSWORD -e 'SELECT 1' $MARIADB_DATABASE"]
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 15s
-    networks:
-      - internal
+      start_period: 20s
+
 
   backend:
     build:

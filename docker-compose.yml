@@ -3,91 +3,89 @@ services:
     image: mariadb:11
     container_name: sncb-db
     environment:
-      MARIADB_DATABASE: sncbslac
-      MARIADB_USER: app
-      MARIADB_PASSWORD: change_me
-      MARIADB_ROOT_PASSWORD: change_me_root
-      TZ: Europe/Brussels
-    volumes:
-      - dbdata:/var/lib/mysql
-    networks: [sncb_net]
+      - MARIADB_DATABASE=sncbslac
+      - MARIADB_USER=app
+      - MARIADB_PASSWORD=change_me
+      - MARIADB_ROOT_PASSWORD=change_me_root
+      - TZ=Europe/Brussels
     healthcheck:
-      test: ["CMD-SHELL", "mariadb-admin ping -uroot -p$MARIADB_ROOT_PASSWORD --silent"]
-      interval: 5s
-      timeout: 3s
-      retries: 30
-
-  backend:
-    build:
-      context: .
-      dockerfile: backend/Dockerfile
-    container_name: sncb-backend
-    environment:
-      TZ: Europe/Brussels
-      DB_DSN: mysql+pymysql://app:change_me@db:3306/sncbslac
-      BACKEND_HOST: 0.0.0.0
-      BACKEND_PORT: 8000
-      BACKEND_LOG_LEVEL: info
-    depends_on:
-      db:
-        condition: service_healthy
-    networks: [sncb_net]
-    expose:
-      - "8000"
-    healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8000/healthz || exit 1"]
+      test: ["CMD-SHELL", "mariadb-admin ping -h 127.0.0.1 -u$$MARIADB_USER -p$$MARIADB_PASSWORD --silent"]
       interval: 10s
       timeout: 5s
       retries: 12
+    volumes:
+      - dbdata:/var/lib/mysql
+    networks:
+      - internal
 
-  worker:
-    build:
-      context: .
-      dockerfile: worker/Dockerfile
-    container_name: sncb-worker
-    environment:
-      TZ: Europe/Brussels
-      DB_DSN: mysql+pymysql://app:change_me@db:3306/sncbslac
-      FROM_STATION: Tournai
-      TO_STATION: Bruxelles-Central
-      IRAIL_LANG: fr
-      POLL_SECONDS: "120"
-      USER_AGENT: SNCB-Slac/1.0 (+https://sncb.terminalcommun.be)
-      DEBUG: "false"
-      LOG_LEVEL: INFO
+  backend:
+    image: sncb-backend:latest
+    container_name: sncb-backend
     depends_on:
       db:
         condition: service_healthy
-    networks: [sncb_net]
-    restart: unless-stopped
+    environment:
+      - TZ=Europe/Brussels
+      - DB_DSN=mysql+pymysql://app:change_me@db:3306/sncbslac
+      - LOG_LEVEL=INFO
+    # Exposé seulement via Traefik
+    labels:
+      - traefik.enable=true
+      # Route /api -> backend: strip le préfixe afin que /api/healthz => /healthz côté FastAPI
+      - traefik.http.routers.sncb-api.rule=Host(`sncb.terminalcommun.be`) && PathPrefix(`/api`)
+      - traefik.http.routers.sncb-api.entrypoints=websecure
+      - traefik.http.routers.sncb-api.tls=true
+      - traefik.http.services.sncb-api.loadbalancer.server.port=8000
+      - traefik.http.middlewares.sncb-api-stripprefix.stripprefix.prefixes=/api
+      - traefik.http.routers.sncb-api.middlewares=sncb-api-stripprefix
+    networks:
+      - internal
+      - proxy   # <— réseau Traefik
 
   frontend:
-    build:
-      context: .
-      dockerfile: frontend/Dockerfile
+    image: sncb-frontend:latest
     container_name: sncb-frontend
     environment:
-      TZ: Europe/Brussels
-      NODE_ENV: production
-      HOST: 0.0.0.0
-      PORT: "3000"
-      # Utilisé par le code Next pour appeler le backend via le proxy /api/* (Traefik -> frontend -> backend)
-      NEXT_PUBLIC_API_BASE_URL: https://sncb.terminalcommun.be/api
+      - TZ=Europe/Brussels
+      - NODE_ENV=production
+      - PORT=3000
+      - HOST=0.0.0.0
+      - NEXT_PUBLIC_API_BASE_URL=https://sncb.terminalcommun.be/api
+    # Exposé seulement via Traefik
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.sncb-web.rule=Host(`sncb.terminalcommun.be`)
+      - traefik.http.routers.sncb-web.entrypoints=websecure
+      - traefik.http.routers.sncb-web.tls=true
+      - traefik.http.services.sncb-web.loadbalancer.server.port=3000
+    networks:
+      - internal
+      - proxy   # <— réseau Traefik
+
+  worker:
+    image: sncb-worker:latest
+    container_name: sncb-worker
     depends_on:
-      backend:
+      db:
         condition: service_healthy
-    networks: [sncb_net]
-    expose:
-      - "3000"
-    healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:3000/health || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 30
+    environment:
+      - TZ=Europe/Brussels
+      - DB_DSN=mysql+pymysql://app:change_me@db:3306/sncbslac
+      - FROM_STATION=Tournai
+      - TO_STATION=Bruxelles-Central
+      - IRAIL_LANG=fr
+      - POLL_SECONDS=120
+      - USER_AGENT=SNCB-Slac/1.0 (+https://sncb.terminalcommun.be)
+      - DEBUG=false
+      - LOG_LEVEL=INFO
+    networks:
+      - internal
 
 volumes:
   dbdata:
 
 networks:
-  sncb_net:
-    driver: bridge
+  internal:
+  proxy:
+    external: true
+    name: TRAEFIK_NETWORK_NAME   # <<< remplace par le nom réel (ex: dokploy)

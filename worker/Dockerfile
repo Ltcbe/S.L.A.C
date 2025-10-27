@@ -1,24 +1,26 @@
 FROM python:3.11-slim
 
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
-
 WORKDIR /app
 
+# (optionnel) paquets utiles
 RUN apt-get update -y \
  && apt-get install -y --no-install-recommends ca-certificates tzdata curl \
  && rm -rf /var/lib/apt/lists/*
 
-# Dépendances
-COPY backend/requirements.txt backend/requirements.txt
-RUN pip install --no-cache-dir -r backend/requirements.txt
+# copier requirements du worker
+COPY worker/requirements.txt /app/worker/requirements.txt
 
-# Code
-COPY worker/ ./worker/
-COPY shared/ ./shared/
+# installer les deps
+RUN pip install --no-cache-dir -r /app/worker/requirements.txt
 
-# PYTHONPATH pour importer worker & shared
-ENV PYTHONPATH="/app"
+# copier le code (shared + worker)
+COPY shared/ /app/shared/
+COPY worker/ /app/worker/
 
-# Entrypoint
-CMD ["python", "-u", "worker/main.py"]
+# permettre "import shared" et "import worker"
+ENV PYTHONPATH=/app
+
+ENV TZ=Europe/Brussels
+
+# lance le worker
+CMD ["python", "-m", "worker.main"]

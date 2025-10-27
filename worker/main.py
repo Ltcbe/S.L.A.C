@@ -25,12 +25,11 @@ POLL_SECONDS = int(os.getenv("POLL_SECONDS", "120"))
 USER_AGENT = os.getenv("USER_AGENT", "SNCB-Slac/1.0 (+https://sncb.terminalcommun.be)")
 TZ = os.getenv("TZ", "Europe/Brussels")
 
-# Mode debug activé si DEBUG=true/1/yes OU si LOG_LEVEL=DEBUG
-DEBUG = True
+# Active le DEBUG si DEBUG=true/1/yes OU si LOG_LEVEL=DEBUG
+DEBUG = os.getenv("DEBUG", "false").lower() in ("1", "true", "yes")
 LOG_LEVEL_ENV = os.getenv("LOG_LEVEL", "INFO").upper()
 LOG_LEVEL = logging.DEBUG if (DEBUG or LOG_LEVEL_ENV == "DEBUG") else getattr(logging, LOG_LEVEL_ENV, logging.INFO)
 
-# Fuseau
 LOCAL_TZ = tz.gettz(TZ) or tz.gettz("Europe/Brussels")
 
 # =========================================================
@@ -116,6 +115,7 @@ def list_connections(_from: str, _to: str) -> List[Dict[str, Any]]:
         "typeOfTransport": "train",
         "results": 6,
     }
+    # Redirigé vers /v1/connections/ automatiquement
     data = get_json("/connections/", params)
     if not isinstance(data, dict):
         if log.isEnabledFor(logging.DEBUG):
@@ -234,20 +234,72 @@ def upsert_journey(session: Session, j: Journey, stops: List[JourneyStop]) -> in
 
 # =========================================================
 # Parsing connexion → (vehicle_id, vehicle_name)
+#  Nouveau : iRail v1 place le véhicule sous departure/arrival
 # =========================================================
 def parse_vehicle_fields(c: Dict[str, Any]) -> tuple[Optional[str], Optional[str]]:
+    """
+    Cherche un identifiant de véhicule dans plusieurs emplacements possibles :
+    - connexion.vehicle (str|dict) [ancien schéma]
+    - connexion.vehicleinfo (dict) [ancien schéma]
+    - connexion.departure.vehicle (str|dict) [v1]
+    - connexion.departure.vehicleinfo (dict) [v1]
+    - fallback sur arrival.*
+    """
+    # 1) Ancien schéma (compat)
     v = c.get("vehicle")
     if isinstance(v, dict):
         vehicle_id = v.get("@id") or v.get("id") or v.get("name")
         vehicle_name = v.get("name") or vehicle_id or "UNKNOWN"
-        return vehicle_id, vehicle_name
-    if isinstance(v, str):
+        if vehicle_id:
+            return vehicle_id, vehicle_name
+    elif isinstance(v, str):
         return v, v
+
     vinfo = c.get("vehicleinfo")
     if isinstance(vinfo, dict):
         vehicle_id = vinfo.get("@id") or vinfo.get("id") or vinfo.get("name")
         vehicle_name = vinfo.get("name") or vehicle_id or "UNKNOWN"
-        return vehicle_id, vehicle_name
+        if vehicle_id:
+            return vehicle_id, vehicle_name
+
+    # 2) Nouveau schéma (v1) : départ
+    dep = c.get("departure") if isinstance(c.get("departure"), dict) else {}
+    if dep:
+        dv = dep.get("vehicle")
+        if isinstance(dv, dict):
+            vehicle_id = dv.get("@id") or dv.get("id") or dv.get("name")
+            vehicle_name = dv.get("name") or vehicle_id or "UNKNOWN"
+            if vehicle_id:
+                return vehicle_id, vehicle_name
+        elif isinstance(dv, str):
+            return dv, dv
+
+        dvinfo = dep.get("vehicleinfo") if isinstance(dep.get("vehicleinfo"), dict) else {}
+        if dvinfo:
+            vehicle_id = dvinfo.get("@id") or dvinfo.get("id") or dvinfo.get("name")
+            vehicle_name = dvinfo.get("name") or vehicle_id or "UNKNOWN"
+            if vehicle_id:
+                return vehicle_id, vehicle_name
+
+    # 3) Nouveau schéma (v1) : arrivée (fallback)
+    arr = c.get("arrival") if isinstance(c.get("arrival"), dict) else {}
+    if arr:
+        av = arr.get("vehicle")
+        if isinstance(av, dict):
+            vehicle_id = av.get("@id") or av.get("id") or av.get("name")
+            vehicle_name = av.get("name") or vehicle_id or "UNKNOWN"
+            if vehicle_id:
+                return vehicle_id, vehicle_name
+        elif isinstance(av, str):
+            return av, av
+
+        avinfo = arr.get("vehicleinfo") if isinstance(arr.get("vehicleinfo"), dict) else {}
+        if avinfo:
+            vehicle_id = avinfo.get("@id") or avinfo.get("id") or avinfo.get("name")
+            vehicle_name = avinfo.get("name") or vehicle_id or "UNKNOWN"
+            if vehicle_id:
+                return vehicle_id, vehicle_name
+
     return None, None
 
 # =========================================================

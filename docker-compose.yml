@@ -12,7 +12,6 @@ services:
     volumes:
       - dbdata:/var/lib/mysql
     healthcheck:
-      # ✅ Ping sans mot de passe, purement connectivité/availability
       test: ["CMD-SHELL", "mariadb-admin ping -h127.0.0.1 --silent"]
       interval: 10s
       timeout: 5s
@@ -36,6 +35,7 @@ services:
       PORT: 8000
       TZ: Europe/Brussels
       LOG_LEVEL: INFO
+    # on garde un port local pour debug uniquement (PAS exposé par Traefik)
     ports:
       - "18000:8000"
     healthcheck:
@@ -62,16 +62,25 @@ services:
       HOST: 0.0.0.0
       NEXT_PUBLIC_API_BASE_URL: /api
       TZ: Europe/Brussels
-    ports:
-      - "13080:3000"
+    # ❌ pas de ports: on laisse Traefik publier en 80/443
     healthcheck:
       test: ["CMD-SHELL", "node -e \"require('http').get('http://127.0.0.1:3000/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))\""]
       interval: 10s
       timeout: 5s
       retries: 6
       start_period: 20s
+    labels:
+      # ✅ Active l'exposition à Traefik
+      - "traefik.enable=true"
+      # ✅ Router pour le domaine
+      - "traefik.http.routers.sncb-frontend.rule=Host(`sncb.terminalcommun.be`)"
+      - "traefik.http.routers.sncb-frontend.entrypoints=websecure"
+      - "traefik.http.routers.sncb-frontend.tls=true"
+      # ✅ Service: Traefik doit cibler le port 3000 du conteneur
+      - "traefik.http.services.sncb-frontend.loadbalancer.server.port=3000"
     networks:
       - internal
+      - dokploy   # ⚠️ indispensable pour que Traefik voie le service
 
   worker:
     container_name: sncb-worker
@@ -97,6 +106,9 @@ services:
 
 networks:
   internal:
+  dokploy:        # réseau externe géré par Dokploy/Traefik
+    external: true
+    name: dokploy
 
 volumes:
   dbdata:

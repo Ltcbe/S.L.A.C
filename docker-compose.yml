@@ -1,3 +1,5 @@
+version: "3.9"
+
 services:
   db:
     image: mariadb:11
@@ -32,18 +34,10 @@ services:
       - DB_DSN=mysql+pymysql://app:change_me@db:3306/sncbslac
       - LOG_LEVEL=INFO
       - DEBUG=false
-    labels:
-      - traefik.enable=true
-      # Route /api -> backend et suppression du préfixe /api
-      - traefik.http.routers.sncb-api.rule=Host(`sncb.terminalcommun.be`) && PathPrefix(`/api`)
-      - traefik.http.routers.sncb-api.entrypoints=websecure
-      - traefik.http.routers.sncb-api.tls=true
-      - traefik.http.services.sncb-api.loadbalancer.server.port=8000
-      - traefik.http.middlewares.sncb-api-strip.stripprefix.prefixes=/api
-      - traefik.http.routers.sncb-api.middlewares=sncb-api-strip
+    ports:
+      - "8000:8000"     # publication directe pour test sans Traefik
     networks:
       - internal
-      - proxy
     restart: unless-stopped
 
   frontend:
@@ -57,16 +51,13 @@ services:
       - NODE_ENV=production
       - PORT=3000
       - HOST=0.0.0.0
-      - NEXT_PUBLIC_API_BASE_URL=https://sncb.terminalcommun.be/api
-    labels:
-      - traefik.enable=true
-      - traefik.http.routers.sncb-web.rule=Host(`sncb.terminalcommun.be`)
-      - traefik.http.routers.sncb-web.entrypoints=websecure
-      - traefik.http.routers.sncb-web.tls=true
-      - traefik.http.services.sncb-web.loadbalancer.server.port=3000
+      # On laisse le front utiliser ses routes /api internes côté Next
+      # Si tu as vraiment besoin d'une URL publique côté client, mets: http://<IP_SERVEUR>:8000
+      - NEXT_PUBLIC_API_BASE_URL=/api
+    ports:
+      - "3000:3000"     # publication directe pour test sans Traefik
     networks:
       - internal
-      - proxy
     restart: unless-stopped
 
   worker:
@@ -97,9 +88,3 @@ volumes:
 
 networks:
   internal:
-  proxy:
-    external: true
-    # ⚠️ Vérifie le nom exact du réseau Traefik/Dokploy avec :
-    # docker network ls | grep dokploy
-    # et mets-le ici si besoin
-    name: dokploy

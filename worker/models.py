@@ -17,7 +17,7 @@ class Journey(Base):
     planned_arrival: Mapped["DateTime"] = mapped_column(DateTime, nullable=False)
     realtime_departure: Mapped["DateTime | None"] = mapped_column(DateTime, nullable=True)
     realtime_arrival: Mapped["DateTime | None"] = mapped_column(DateTime, nullable=True)
-    status: Mapped[str] = mapped_column(Enum("running","completed", name="journey_status"), nullable=False)
+    status: Mapped[str] = mapped_column(Enum("running", "completed", name="journey_status"), nullable=False)
     direction: Mapped[str | None] = mapped_column(String(128), nullable=True)
 
     stops: Mapped[list["JourneyStop"]] = relationship("JourneyStop", back_populates="journey", cascade="all, delete-orphan")

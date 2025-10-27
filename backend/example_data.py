@@ -1,14 +1,12 @@
 # --- backend/example_data.py ---
 from datetime import datetime, date, timedelta
 from sqlalchemy import delete
-from database import SessionLocal, engine
-from models import Base, Journey, JourneyStop
+from shared.database import SessionLocal, engine
+from shared.models import Base, Journey, JourneyStop
 
-# Crée les tables si besoin
 Base.metadata.create_all(bind=engine)
 
 def seed_example():
-    """Insère un trajet d'exemple (+ arrêts) pour tests manuels."""
     with SessionLocal() as s:
         j = Journey(
             vehicle_uri="http://irail.be/vehicle/IC3033",
@@ -23,15 +21,13 @@ def seed_example():
             status="completed",
             direction="Bruxelles-Central",
         )
-        s.add(j)
-        s.flush()
+        s.add(j); s.flush()
 
         stops = [
             JourneyStop(
                 journey_id=j.id, stop_order=1,
                 station_uri=j.from_station_uri, station_name="Tournai",
-                planned_departure=j.planned_departure,
-                arrived=False, left=True
+                planned_departure=j.planned_departure, arrived=False, left=True
             ),
             JourneyStop(
                 journey_id=j.id, stop_order=2,
@@ -43,18 +39,14 @@ def seed_example():
             JourneyStop(
                 journey_id=j.id, stop_order=3,
                 station_uri=j.to_station_uri, station_name="Bruxelles-Central",
-                planned_arrival=j.planned_arrival,
-                arrived=True, left=False
+                planned_arrival=j.planned_arrival, arrived=True, left=False
             ),
         ]
-        s.add_all(stops)
-        s.commit()
+        s.add_all(stops); s.commit()
         print("✅ Example data inserted")
 
 def wipe_example():
-    """Supprime toutes les données (trajets + arrêts) via l’ORM."""
     with SessionLocal() as s:
-        # Supprimer d'abord les stops, puis les journeys (FK)
         s.execute(delete(JourneyStop))
         s.execute(delete(Journey))
         s.commit()

@@ -21,7 +21,9 @@ services:
         aliases: [db]
 
   backend:
-    build: ./backend
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
     restart: unless-stopped
     depends_on:
       db:
@@ -32,14 +34,15 @@ services:
       BACKEND_HOST: ${BACKEND_HOST}
       BACKEND_PORT: ${BACKEND_PORT}
       BACKEND_LOG_LEVEL: ${BACKEND_LOG_LEVEL}
-    expose:
-      - "8000"
+    expose: ["8000"]
     networks:
       appnet:
         aliases: [backend]
 
   worker:
-    build: ./worker
+    build:
+      context: .
+      dockerfile: worker/Dockerfile
     restart: unless-stopped
     depends_on:
       db:
@@ -60,14 +63,12 @@ services:
     build: ./frontend
     restart: unless-stopped
     environment:
-      # Le proxy Next (app/api/...) contactera le backend via ce hostname Docker
       BACKEND_URL: ${BACKEND_URL:-http://backend:8000}
       TZ: ${TZ}
       PORT: 3000
     depends_on:
       - backend
-    expose:
-      - "3000"
+    expose: ["3000"]
     networks:
       appnet:
         aliases: [frontend]

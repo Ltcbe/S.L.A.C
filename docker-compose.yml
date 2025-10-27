@@ -40,8 +40,8 @@ services:
 
   worker:
     build:
-      context: ./worker
-      dockerfile: Dockerfile
+      context: .                # <-- IMPORTANT: contexte = racine du repo
+      dockerfile: worker/Dockerfile
     container_name: ${COMPOSE_PROJECT_NAME:-sncb}-worker-1
     environment:
       DB_DSN: mysql+pymysql://app:change_me@db:3306/sncbslac
@@ -72,7 +72,6 @@ services:
     depends_on:
       backend:
         condition: service_started
-    # Pas de ports: Dokploy route vers 3000
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3000/health"]
       interval: 20s

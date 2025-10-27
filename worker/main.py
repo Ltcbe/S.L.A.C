@@ -2,6 +2,7 @@
 import os
 import time
 import logging
+import re
 from datetime import datetime, date
 from typing import Any, Dict, List, Optional
 
@@ -102,6 +103,51 @@ def ts_to_dt(ts: Optional[str | int]) -> Optional[datetime]:
     dt = datetime.fromtimestamp(ts, tz=LOCAL_TZ)
     return dt.replace(tzinfo=None)
 
+def normalize_vehicle_id(raw: str) -> List[str]:
+    """
+    Normalise un identifiant véhicule iRail en variantes compatibles /vehicle.
+    - Si raw commence par http(s):// -> on garde tel quel.
+    - Si raw ressemble à 'BE.NMBS.IC3232' -> on fabrique 'http://irail.be/vehicle/IC3232' + variantes.
+    - Si raw ressemble déjà à 'IC3232' -> on fabrique l'URI.
+    Retourne une liste ordonnée de candidats à essayer.
+    """
+    candidates: List[str] = []
+    if not raw:
+        return candidates
+
+    r = raw.strip()
+
+    # Déjà une URI complète
+    if r.startswith("http://") or r.startswith("https://"):
+        candidates.append(r)
+        # Ajoute le code simple s'il existe (fin d'URI)
+        m = re.search(r"/vehicle/([A-Za-z]+[0-9]+)$", r)
+        if m:
+            code = m.group(1)
+            candidates.append(code)  # IC3232
+            candidates.append(f"BE.NMBS.{code}")  # BE.NMBS.IC3232
+        return candidates
+
+    # BE.NMBS.IC3232 -> IC3232
+    m = re.match(r"^BE\.NMBS\.([A-Za-z]+[0-9]+)$", r)
+    if m:
+        code = m.group(1)  # IC3232
+        candidates.append(f"http://irail.be/vehicle/{code}")  # préférée
+        candidates.append(code)
+        candidates.append(r)
+        return candidates
+
+    # Code simple (IC3232)
+    if re.match(r"^[A-Za-z]+[0-9]+$", r):
+        candidates.append(f"http://irail.be/vehicle/{r}")
+        candidates.append(r)
+        candidates.append(f"BE.NMBS.{r}")
+        return candidates
+
+    # Dernier recours : renvoyer brut
+    candidates.append(r)
+    return candidates
+
 def list_connections(_from: str, _to: str) -> List[Dict[str, Any]]:
     """Appelle /connections et retourne une liste de connexions (dicts)."""
     now_local = datetime.now(LOCAL_TZ)
@@ -115,8 +161,7 @@ def list_connections(_from: str, _to: str) -> List[Dict[str, Any]]:
         "typeOfTransport": "train",
         "results": 6,
     }
-    # Redirigé vers /v1/connections/ automatiquement
-    data = get_json("/connections/", params)
+    data = get_json("/connections/", params)  # redirigé vers /v1/connections/
     if not isinstance(data, dict):
         if log.isEnabledFor(logging.DEBUG):
             log.debug("connections: data is not dict: %r", data)
@@ -130,73 +175,65 @@ def list_connections(_from: str, _to: str) -> List[Dict[str, Any]]:
         log.debug("connections %s -> %s : %d result(s)", _from, _to, len(conns))
     return conns
 
-def vehicle_stops(vehicle_id: str, service_date: date) -> List[Dict[str, Any]]:
-    """Appelle /vehicle et normalise la liste des arrêts."""
-    params = {
-        "id": vehicle_id,
-        "date": service_date.strftime("%Y%m%d"),
-        "format": "json",
-        "lang": IRAIL_LANG,
-    }
-    data = get_json("/vehicle/", params)
-    if not isinstance(data, dict) or "vehicle" not in data:
-        if log.isEnabledFor(logging.DEBUG):
-            log.debug("vehicle %s: réponse invalide", vehicle_id)
-        return []
+def vehicle_stops(vehicle_id_raw: str, service_date: date) -> List[Dict[str, Any]]:
+    """
+    Appelle /vehicle et normalise la liste des arrêts. Essaie plusieurs variantes d'ID.
+    """
+    date_str = service_date.strftime("%Y%m%d")
+    tried: List[str] = []
+    for vid in normalize_vehicle_id(vehicle_id_raw):
+        params = {"id": vid, "date": date_str, "format": "json", "lang": IRAIL_LANG}
+        data = get_json("/vehicle/", params)
+        tried.append(vid)
+        if isinstance(data, dict) and "vehicle" in data:
+            v = data["vehicle"]
+            stops = v.get("stops", {}).get("stop", [])
+            if isinstance(stops, dict):
+                stops = [stops]
+            if not isinstance(stops, list):
+                stops = []
+            out: List[Dict[str, Any]] = []
 
-    v = data["vehicle"]
-    stops = v.get("stops", {}).get("stop", [])
-    if isinstance(stops, dict):
-        stops = [stops]
-    if not isinstance(stops, list):
-        stops = []
+            for idx, s in enumerate(stops, start=1):
+                if not isinstance(s, dict):
+                    continue
+                station_name = s.get("station") or s.get("stationname") or ""
+                stationinfo = s.get("stationinfo") if isinstance(s.get("stationinfo"), dict) else {}
+                station_uri = stationinfo.get("@id") if isinstance(stationinfo, dict) else ""
+                plat = s.get("platform")
+                platform = plat.get("$") or plat.get("name") if isinstance(plat, dict) else (plat if isinstance(plat, str) else None)
+                planned_arrival = ts_to_dt(s.get("time")) if s.get("arrival") else None
+                planned_departure = ts_to_dt(s.get("time")) if s.get("departure") else None
+                realtime_arrival = ts_to_dt(s.get("realtime")) if s.get("arrival") else None
+                realtime_departure = ts_to_dt(s.get("realtime")) if s.get("departure") else None
 
-    out: List[Dict[str, Any]] = []
-    for idx, s in enumerate(stops, start=1):
-        if not isinstance(s, dict):
-            continue
+                def as_bool(v: Any) -> bool:
+                    if isinstance(v, bool): return v
+                    if isinstance(v, int): return v != 0
+                    if isinstance(v, str): return v.strip() in ("1", "true", "True", "yes", "YES")
+                    return False
 
-        station_name = s.get("station") or s.get("stationname") or ""
-        stationinfo = s.get("stationinfo") if isinstance(s.get("stationinfo"), dict) else {}
-        station_uri = stationinfo.get("@id") if isinstance(stationinfo, dict) else ""
+                out.append({
+                    "stop_order": idx,
+                    "station_uri": station_uri or "",
+                    "station_name": station_name or "",
+                    "planned_arrival": planned_arrival,
+                    "planned_departure": planned_departure,
+                    "realtime_arrival": realtime_arrival,
+                    "realtime_departure": realtime_departure,
+                    "platform": str(platform) if platform is not None else None,
+                    "arrived": as_bool(s.get("arrived")),
+                    "left": as_bool(s.get("left")),
+                    "is_extra_stop": as_bool(s.get("extra")),
+                    "arrival_canceled": as_bool(s.get("canceled")) if s.get("arrival") else False,
+                    "departure_canceled": as_bool(s.get("canceled")) if s.get("departure") else False,
+                })
+            if log.isEnabledFor(logging.DEBUG):
+                log.debug("vehicle %s (tried=%s): %d stop(s)", vehicle_id_raw, tried, len(out))
+            return out
 
-        # Plateforme (dict ou string)
-        platform = None
-        plat = s.get("platform")
-        if isinstance(plat, dict):
-            platform = plat.get("$") or plat.get("name")
-        elif isinstance(plat, str):
-            platform = plat
-
-        planned_arrival = ts_to_dt(s.get("time")) if s.get("arrival") else None
-        planned_departure = ts_to_dt(s.get("time")) if s.get("departure") else None
-        realtime_arrival = ts_to_dt(s.get("realtime")) if s.get("arrival") else None
-        realtime_departure = ts_to_dt(s.get("realtime")) if s.get("departure") else None
-
-        def as_bool(v: Any) -> bool:
-            if isinstance(v, bool): return v
-            if isinstance(v, int): return v != 0
-            if isinstance(v, str): return v.strip() in ("1", "true", "True", "yes", "YES")
-            return False
-
-        out.append({
-            "stop_order": idx,
-            "station_uri": station_uri or "",
-            "station_name": station_name or "",
-            "planned_arrival": planned_arrival,
-            "planned_departure": planned_departure,
-            "realtime_arrival": realtime_arrival,
-            "realtime_departure": realtime_departure,
-            "platform": str(platform) if platform is not None else None,
-            "arrived": as_bool(s.get("arrived")),
-            "left": as_bool(s.get("left")),
-            "is_extra_stop": as_bool(s.get("extra")),
-            "arrival_canceled": as_bool(s.get("canceled")) if s.get("arrival") else False,
-            "departure_canceled": as_bool(s.get("canceled")) if s.get("departure") else False,
-        })
-    if log.isEnabledFor(logging.DEBUG):
-        log.debug("vehicle %s: %d stop(s)", vehicle_id, len(out))
-    return out
+    log.warning("vehicle stops: aucune réponse valide pour id=%s (tried=%s)", vehicle_id_raw, tried)
+    return []
 
 # =========================================================
 # Upsert DB
@@ -234,18 +271,10 @@ def upsert_journey(session: Session, j: Journey, stops: List[JourneyStop]) -> in
 
 # =========================================================
 # Parsing connexion → (vehicle_id, vehicle_name)
-#  Nouveau : iRail v1 place le véhicule sous departure/arrival
+#  v1 place le véhicule sous departure/arrival
 # =========================================================
 def parse_vehicle_fields(c: Dict[str, Any]) -> tuple[Optional[str], Optional[str]]:
-    """
-    Cherche un identifiant de véhicule dans plusieurs emplacements possibles :
-    - connexion.vehicle (str|dict) [ancien schéma]
-    - connexion.vehicleinfo (dict) [ancien schéma]
-    - connexion.departure.vehicle (str|dict) [v1]
-    - connexion.departure.vehicleinfo (dict) [v1]
-    - fallback sur arrival.*
-    """
-    # 1) Ancien schéma (compat)
+    # Ancien schéma (compat)
     v = c.get("vehicle")
     if isinstance(v, dict):
         vehicle_id = v.get("@id") or v.get("id") or v.get("name")
@@ -262,9 +291,15 @@ def parse_vehicle_fields(c: Dict[str, Any]) -> tuple[Optional[str], Optional[str
         if vehicle_id:
             return vehicle_id, vehicle_name
 
-    # 2) Nouveau schéma (v1) : départ
+    # Nouveau schéma (v1) : départ
     dep = c.get("departure") if isinstance(c.get("departure"), dict) else {}
     if dep:
+        dvinfo = dep.get("vehicleinfo") if isinstance(dep.get("vehicleinfo"), dict) else {}
+        if dvinfo:
+            vehicle_id = dvinfo.get("@id") or dvinfo.get("id") or dvinfo.get("name")
+            vehicle_name = dvinfo.get("name") or vehicle_id or "UNKNOWN"
+            if vehicle_id:
+                return vehicle_id, vehicle_name
         dv = dep.get("vehicle")
         if isinstance(dv, dict):
             vehicle_id = dv.get("@id") or dv.get("id") or dv.get("name")
@@ -274,16 +309,15 @@ def parse_vehicle_fields(c: Dict[str, Any]) -> tuple[Optional[str], Optional[str
         elif isinstance(dv, str):
             return dv, dv
 
-        dvinfo = dep.get("vehicleinfo") if isinstance(dep.get("vehicleinfo"), dict) else {}
-        if dvinfo:
-            vehicle_id = dvinfo.get("@id") or dvinfo.get("id") or dvinfo.get("name")
-            vehicle_name = dvinfo.get("name") or vehicle_id or "UNKNOWN"
-            if vehicle_id:
-                return vehicle_id, vehicle_name
-
-    # 3) Nouveau schéma (v1) : arrivée (fallback)
+    # Fallback : arrivée
     arr = c.get("arrival") if isinstance(c.get("arrival"), dict) else {}
     if arr:
+        avinfo = arr.get("vehicleinfo") if isinstance(arr.get("vehicleinfo"), dict) else {}
+        if avinfo:
+            vehicle_id = avinfo.get("@id") or avinfo.get("id") or avinfo.get("name")
+            vehicle_name = avinfo.get("name") or vehicle_id or "UNKNOWN"
+            if vehicle_id:
+                return vehicle_id, vehicle_name
         av = arr.get("vehicle")
         if isinstance(av, dict):
             vehicle_id = av.get("@id") or av.get("id") or av.get("name")
@@ -292,13 +326,6 @@ def parse_vehicle_fields(c: Dict[str, Any]) -> tuple[Optional[str], Optional[str
                 return vehicle_id, vehicle_name
         elif isinstance(av, str):
             return av, av
-
-        avinfo = arr.get("vehicleinfo") if isinstance(arr.get("vehicleinfo"), dict) else {}
-        if avinfo:
-            vehicle_id = avinfo.get("@id") or avinfo.get("id") or avinfo.get("name")
-            vehicle_name = avinfo.get("name") or vehicle_id or "UNKNOWN"
-            if vehicle_id:
-                return vehicle_id, vehicle_name
 
     return None, None
 
@@ -328,8 +355,8 @@ def run_once() -> None:
                 dep = c.get("departure") if isinstance(c.get("departure"), dict) else {}
                 arr = c.get("arrival")  if isinstance(c.get("arrival"),  dict) else {}
 
-                vehicle_id, vehicle_name = parse_vehicle_fields(c)
-                if not vehicle_id:
+                vehicle_id_raw, vehicle_name = parse_vehicle_fields(c)
+                if not vehicle_id_raw:
                     if log.isEnabledFor(logging.DEBUG):
                         log.debug("Connexion %d: pas de vehicle id, skip. keys=%s", idx, list(c.keys()))
                     continue
@@ -362,7 +389,8 @@ def run_once() -> None:
                 from_uri = station_uri_of(dep)
                 to_uri   = station_uri_of(arr)
 
-                stops_dicts = vehicle_stops(vehicle_id, service_d)
+                # Récup arrêts avec normalisation d'ID + fallbacks
+                stops_dicts = vehicle_stops(vehicle_id_raw, service_d)
                 stops: List[JourneyStop] = []
                 for sd in stops_dicts:
                     stops.append(JourneyStop(
@@ -382,8 +410,8 @@ def run_once() -> None:
                     ))
 
                 j = Journey(
-                    vehicle_uri        = str(vehicle_id),
-                    vehicle_name       = str(vehicle_name)[:64],
+                    vehicle_uri        = normalize_vehicle_id(vehicle_id_raw)[0],  # stocke la forme préférée (URI si possible)
+                    vehicle_name       = str(vehicle_name)[:64] if vehicle_name else normalize_vehicle_id(vehicle_id_raw)[0],
                     service_date       = service_d,
                     from_station_uri   = from_uri or "",
                     to_station_uri     = to_uri or "",
@@ -400,11 +428,11 @@ def run_once() -> None:
                     total_upserts += 1
                     if log.isEnabledFor(logging.DEBUG):
                         log.debug(
-                            "Upsert OK: jid=%s veh=%s (%s) stops=%d status=%s",
-                            jid, vehicle_id, vehicle_name, len(stops), status
+                            "Upsert OK: jid=%s veh_raw=%s veh_norm=%s stops=%d status=%s",
+                            jid, vehicle_id_raw, j.vehicle_uri, len(stops), status
                         )
                 except Exception as e:
-                    log.exception("Upsert échoué pour veh=%s (%s): %s", vehicle_id, vehicle_name, e)
+                    log.exception("Upsert échoué pour veh=%s (%s): %s", vehicle_id_raw, vehicle_name, e)
 
         s.commit()
 

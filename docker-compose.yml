@@ -11,48 +11,81 @@ services:
     volumes:
       - dbdata:/var/lib/mysql
     healthcheck:
+      # On ping en root, avec le MDP défini ci-dessus.
       test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$$MARIADB_ROOT_PASSWORD | grep 'mysqld is alive' || exit 1"]
       interval: 10s
       timeout: 5s
-      retries: 6
-      start_period: 30s
+      retries: 10
+      start_period: 40s
     networks:
       - internal
 
   backend:
-    image: sncb-backend:local
     container_name: sncb-backend
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
     restart: unless-stopped
-    environment:
-      DB_DSN: mysql+pymysql://app:change_me@db:3306/sncbslac
-      MARIADB_HOST: db
-      MARIADB_PORT: "3306"
-      MARIADB_DATABASE: sncbslac
-      MARIADB_USER: app
-      MARIADB_PASSWORD: change_me
-      TZ: Europe/Brussels
-      LOG_LEVEL: INFO
-      DEBUG: "false"
-      HOST: 0.0.0.0
-      PORT: "8000"
     depends_on:
       db:
         condition: service_healthy
+    environment:
+      # DB / SQLAlchemy
+      DB_DSN: mysql+pymysql://app:change_me@db:3306/sncbslac
+      # FastAPI
+      HOST: 0.0.0.0
+      PORT: 8000
+      TZ: Europe/Brussels
+      LOG_LEVEL: INFO
     ports:
       - "18000:8000"
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=5).status==200 else 1)"]
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8000/healthz || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 6
-      start_period: 15s
+      start_period: 20s
+    networks:
+      - internal
+
+  frontend:
+    container_name: sncb-frontend
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      HOST: 0.0.0.0
+      # Le front parle au back via le proxy Next (/api).
+      # Et Dokploy reverse-proxy le domaine public vers le front.
+      NEXT_PUBLIC_API_BASE_URL: /api
+      TZ: Europe/Brussels
+    ports:
+      - "13080:3000"
+    healthcheck:
+      # Pas besoin de curl: on utilise Node pour tester /health (200 => OK)
+      test: ["CMD-SHELL", "node -e \"require('http').get('http://127.0.0.1:3000/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))\""]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
     networks:
       - internal
 
   worker:
-    image: sncb-worker:local
     container_name: sncb-worker
+    build:
+      context: .
+      dockerfile: worker/Dockerfile
     restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
     environment:
       DB_DSN: mysql+pymysql://app:change_me@db:3306/sncbslac
       FROM_STATION: Tournai
@@ -61,41 +94,13 @@ services:
       POLL_SECONDS: "120"
       USER_AGENT: SNCB-Slac/1.0 (+https://sncb.terminalcommun.be)
       TZ: Europe/Brussels
-      LOG_LEVEL: INFO
       DEBUG: "false"
-    depends_on:
-      db:
-        condition: service_healthy
+      LOG_LEVEL: INFO
     networks:
       - internal
-
-  frontend:
-    image: sncb-frontend:local
-    container_name: sncb-frontend
-    restart: unless-stopped
-    environment:
-      NODE_ENV: production
-      PORT: "3000"
-      HOST: 0.0.0.0
-      NEXT_PUBLIC_API_BASE_URL: /api
-      TZ: Europe/Brussels
-    depends_on:
-      backend:
-        condition: service_healthy
-    ports:
-      - "13080:3000"   # <-- change ici; mets 13000 si tu préfères
-    healthcheck:
-      test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:3000/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
-      interval: 10s
-      timeout: 5s
-      retries: 6
-      start_period: 25s
-    networks:
-      - internal
-
-volumes:
-  dbdata:
 
 networks:
   internal:
-    driver: bridge
+
+volumes:
+  dbdata:

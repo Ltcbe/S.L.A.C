@@ -26,7 +26,7 @@ USER_AGENT = os.getenv("USER_AGENT", "SNCB-Slac/1.0 (+https://sncb.terminalcommu
 TZ = os.getenv("TZ", "Europe/Brussels")
 
 # Mode debug activé si DEBUG=true/1/yes OU si LOG_LEVEL=DEBUG
-DEBUG = os.getenv("DEBUG", "false").lower() in ("1", "true", "yes")
+DEBUG = True
 LOG_LEVEL_ENV = os.getenv("LOG_LEVEL", "INFO").upper()
 LOG_LEVEL = logging.DEBUG if (DEBUG or LOG_LEVEL_ENV == "DEBUG") else getattr(logging, LOG_LEVEL_ENV, logging.INFO)
 

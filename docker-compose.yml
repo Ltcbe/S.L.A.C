@@ -35,7 +35,7 @@ services:
       - LOG_LEVEL=INFO
       - DEBUG=false
     ports:
-      - "8000:8000"     # publication directe pour test sans Traefik
+      - "8000:8000"
     networks:
       - internal
     restart: unless-stopped
@@ -51,11 +51,9 @@ services:
       - NODE_ENV=production
       - PORT=3000
       - HOST=0.0.0.0
-      # On laisse le front utiliser ses routes /api internes côté Next
-      # Si tu as vraiment besoin d'une URL publique côté client, mets: http://<IP_SERVEUR>:8000
       - NEXT_PUBLIC_API_BASE_URL=/api
     ports:
-      - "3000:3000"     # publication directe pour test sans Traefik
+      - "13000:3000"   # <— changement ici (évite le conflit avec 3000)
     networks:
       - internal
     restart: unless-stopped

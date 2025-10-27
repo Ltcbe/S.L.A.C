@@ -1,73 +1,94 @@
-# --- backend/main.py ---
 import os
-from fastapi import FastAPI, HTTPException, Query
+import logging
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from sqlalchemy.orm import Session
 from sqlalchemy import text
-from datetime import datetime
 
-from database import SessionLocal, engine
-from models import Base, Journey, JourneyStop
-from crud import list_journeys, get_journey_with_stops
+# Imports partagés
+from shared.database import engine, SessionLocal
+from shared.models import Base, Journey, JourneyStop
 
+# Initialisation du logger
+logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
+logger = logging.getLogger(__name__)
+
+# Création des tables si elles n'existent pas
 Base.metadata.create_all(bind=engine)
 
-app = FastAPI(title="SNCB Slac API", version="1.0.0")
+# Instance principale FastAPI
+app = FastAPI(
+    title="SNCB Backend API",
+    description="Backend FastAPI pour la collecte et l’exposition des trajets SNCB/iRail",
+    version="1.0.0"
+)
 
+# Middleware CORS (autorise ton domaine frontend)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,
+    allow_origins=["*"],  # tu peux restreindre à ["https://sncb.terminalcommun.be"]
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-class JourneyOut(BaseModel):
-    id: int
-    vehicle_name: str
-    vehicle_uri: str
-    service_date: datetime
-    planned_departure: datetime
-    planned_arrival: datetime
-    status: str
-    class Config:
-        from_attributes = True
+# Dépendance DB
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
 
-class StopOut(BaseModel):
-    stop_order: int
-    station_name: str
-    planned_arrival: datetime | None
-    planned_departure: datetime | None
-    realtime_arrival: datetime | None
-    realtime_departure: datetime | None
-    platform: str | None
-    arrived: bool
-    left: bool
-    is_extra_stop: bool
-    arrival_canceled: bool
-    departure_canceled: bool
-    class Config:
-        from_attributes = True
+# --- Routes de base ---
 
 @app.get("/healthz")
 def healthz():
-    with SessionLocal() as s:
-        s.execute(text("SELECT 1"))
+    """Route de test simple pour vérifier que le backend est en vie."""
     return {"ok": True}
 
-@app.get("/trains", response_model=list[JourneyOut])
-def api_list_trains(status: str = Query(None, pattern="^(running|completed)$")):
-    with SessionLocal() as s:
-        items = list_journeys(s, status=status, limit=200)
-        return items
+@app.get("/")
+def root():
+    """Page racine (redirection ou message d’accueil)."""
+    return {"message": "Bienvenue sur l’API SNCB Backend"}
 
-@app.get("/trains/{journey_id}")
-def api_get_train(journey_id: int):
-    with SessionLocal() as s:
-        j, stops = get_journey_with_stops(s, journey_id)
-        if not j:
-            raise HTTPException(404, "journey not found")
-        return {
-            "journey": JourneyOut.model_validate(j).model_dump(),
-            "stops": [StopOut.model_validate(x).model_dump() for x in stops],
-        }
+@app.get("/journeys")
+def get_journeys(limit: int = 10):
+    """Retourne les derniers trajets connus."""
+    with SessionLocal() as db:
+        rows = db.query(Journey).order_by(Journey.id.desc()).limit(limit).all()
+        return [j.as_dict() for j in rows]
+
+@app.get("/journeys/{journey_id}/stops")
+def get_stops(journey_id: int):
+    """Retourne les arrêts d’un trajet donné."""
+    with SessionLocal() as db:
+        stops = (
+            db.query(JourneyStop)
+            .filter(JourneyStop.journey_id == journey_id)
+            .order_by(JourneyStop.stop_order)
+            .all()
+        )
+        return [s.as_dict() for s in stops]
+
+@app.get("/dbping")
+def db_ping():
+    """Vérifie la connexion à la base MariaDB."""
+    try:
+        with SessionLocal() as db:
+            db.execute(text("SELECT 1"))
+        return {"db": "ok"}
+    except Exception as e:
+        logger.error(f"Erreur DB: {e}")
+        return {"db": "error", "detail": str(e)}
+
+# --- Démarrage (pour uvicorn) ---
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(
+        "backend.main:app",
+        host="0.0.0.0",
+        port=int(os.getenv("PORT", 8000)),
+        reload=False
+    )

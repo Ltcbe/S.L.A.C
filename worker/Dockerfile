@@ -9,7 +9,8 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# IMPORTANT : on copie tout le dossier worker dans /app
 COPY . /app
 
-# Aucune exposition de port: c'est un job en boucle
+# Lance la boucle de collecte
 CMD ["python", "-u", "main.py"]
